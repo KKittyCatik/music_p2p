@@ -45,6 +45,9 @@ func (s *Storage) LoadTrack(path string) (string, error) {
 	cidStr := hex.EncodeToString(sum[:])
 
 	frames := extractMP3Frames(data)
+	if len(frames) == 0 {
+		return "", fmt.Errorf("no MP3 frames found in %q", path)
+	}
 	chunks := groupFrames(frames)
 
 	s.mu.Lock()
@@ -88,6 +91,7 @@ func (s *Storage) ListTracks() []string {
 
 // extractMP3Frames scans data and returns each MP3 frame as a byte slice.
 // An MP3 sync word is 0xFF followed by 0xE0–0xFF (MPEG-1/2/2.5 layer I/II/III).
+// Returns nil if no valid frames are found.
 func extractMP3Frames(data []byte) [][]byte {
 	var frames [][]byte
 	i := 0
@@ -101,10 +105,6 @@ func extractMP3Frames(data []byte) [][]byte {
 			}
 		}
 		i++
-	}
-	// If no frames were detected (e.g. in tests), treat the whole file as one frame.
-	if len(frames) == 0 && len(data) > 0 {
-		frames = append(frames, data)
 	}
 	return frames
 }

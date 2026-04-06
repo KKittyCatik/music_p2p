@@ -68,7 +68,10 @@ func (e *Engine) StartStreaming(ctx context.Context, cid string) error {
 			continue
 		}
 		e.host.Peerstore().AddAddrs(p.ID, p.Addrs, time.Hour)
-		_ = e.host.Connect(ctx, p)
+		if err := e.host.Connect(ctx, p); err != nil {
+			// Log but continue – other providers may be reachable.
+			_ = err
+		}
 	}
 
 	// Query total chunks from the first reachable peer
@@ -209,7 +212,7 @@ func (e *Engine) queryTotalChunks(ctx context.Context, cid string, providers []p
 			return total, nil
 		}
 	}
-	return 1, nil
+	return 0, fmt.Errorf("could not determine total chunks for %s from any provider", cid)
 }
 
 // queryTotalFromPeer sends "TOTAL <cid>\n" and expects "<n>\n" back.
@@ -259,9 +262,8 @@ func (e *Engine) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		if e.done {
-			// Done but chunk missing – skip
-			e.nextRead++
-			continue
+			// Done but chunk still missing – audio data is unrecoverable.
+			return 0, fmt.Errorf("chunk %d missing after download completed", e.nextRead)
 		}
 		e.readCond.Wait()
 	}

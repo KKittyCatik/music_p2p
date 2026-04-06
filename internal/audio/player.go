@@ -12,9 +12,10 @@ import (
 
 // Player decodes an MP3 stream and plays it through the system audio output.
 type Player struct {
-	mu        sync.Mutex
-	playing   bool
-	stopCh    chan struct{}
+	mu       sync.Mutex
+	playing  bool
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // NewPlayer creates a new Player.
@@ -40,6 +41,7 @@ func (p *Player) Play(reader io.Reader) error {
 	p.playing = true
 	stopCh := make(chan struct{})
 	p.stopCh = stopCh
+	p.stopOnce = sync.Once{} // reset for each new Play call
 	p.mu.Unlock()
 
 	doneCh := make(chan struct{})
@@ -66,12 +68,12 @@ func (p *Player) Play(reader io.Reader) error {
 	return nil
 }
 
-// Stop halts playback immediately.
+// Stop halts playback immediately. Safe to call multiple times.
 func (p *Player) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.playing {
-		close(p.stopCh)
+		p.stopOnce.Do(func() { close(p.stopCh) })
 	}
 }
 
