@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -69,8 +70,7 @@ func (e *Engine) StartStreaming(ctx context.Context, cid string) error {
 		}
 		e.host.Peerstore().AddAddrs(p.ID, p.Addrs, time.Hour)
 		if err := e.host.Connect(ctx, p); err != nil {
-			// Log but continue – other providers may be reachable.
-			_ = err
+			log.Printf("streaming: failed to connect to provider %s: %v", p.ID, err)
 		}
 	}
 

@@ -152,13 +152,6 @@ func (s *Scheduler) NextRequests() []ChunkRequest {
 	return requests
 }
 
-// MarkInflight marks a chunk as currently being fetched.
-func (s *Scheduler) MarkInflight(index int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.inflight[index] = struct{}{}
-}
-
 // MarkCompleted removes a chunk from inflight and records it as done.
 func (s *Scheduler) MarkCompleted(index int) {
 	s.mu.Lock()
