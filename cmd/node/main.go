@@ -7,13 +7,15 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	internaldht "github.com/KKittyCatik/music_p2p/internal/dht"
 	"github.com/KKittyCatik/music_p2p/internal/audio"
+	internaldht "github.com/KKittyCatik/music_p2p/internal/dht"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
 	"github.com/KKittyCatik/music_p2p/internal/p2p"
+	"github.com/KKittyCatik/music_p2p/internal/queue"
 	"github.com/KKittyCatik/music_p2p/internal/scoring"
 	"github.com/KKittyCatik/music_p2p/internal/storage"
 	"github.com/KKittyCatik/music_p2p/internal/streaming"
@@ -21,12 +23,13 @@ import (
 
 func main() {
 	var (
-		listenPort = flag.Int("listen", 4001, "TCP port to listen on")
+		listenPort  = flag.Int("listen", 4001, "TCP port to listen on")
 		connectAddr = flag.String("connect", "", "peer multiaddr to connect to")
-		playCID    = flag.String("play", "", "CID of the track to play")
-		searchQ    = flag.String("search", "", "search query for tracks")
-		sharePath  = flag.String("share", "", "path to a local MP3 file to share")
-		announce   = flag.Bool("announce", false, "announce shared tracks to the DHT")
+		playCID     = flag.String("play", "", "CID of the track to play")
+		searchQ     = flag.String("search", "", "search query for tracks")
+		sharePath   = flag.String("share", "", "path to a local MP3 file to share")
+		announce    = flag.Bool("announce", false, "announce shared tracks to the DHT")
+		queueCIDs   = flag.String("queue", "", "comma-separated list of CIDs to enqueue for autoplay")
 	)
 	flag.Parse()
 
@@ -119,37 +122,75 @@ func main() {
 			fmt.Println("No results found.")
 		}
 		for _, m := range results {
-			fmt.Printf("CID: %s\n  Title:  %s\n  Artist: %s\n  Duration: %s\n",
-				m.CID, m.Title, m.Artist, m.Duration)
+			fmt.Printf("CID: %s\n  MetaID: %s\n  Title:  %s\n  Artist: %s\n  Duration: %s\n",
+				m.CID, m.MetaID, m.Title, m.Artist, m.Duration)
 		}
 		return
 	}
 
-	// --play: stream and play a track by CID
-	if *playCID != "" {
-		if err := engine.StartStreaming(ctx, *playCID); err != nil {
-			log.Fatalf("start streaming %s: %v", *playCID, err)
-		}
-		log.Printf("Streaming %s …", *playCID)
+	// --play / --queue: stream and play tracks
+	if *playCID != "" || *queueCIDs != "" {
+		q := queue.New()
 
-		player := audio.NewPlayer()
-		if err := player.Play(engine); err != nil {
-			log.Fatalf("play: %v", err)
+		// Enqueue the primary CID first.
+		if *playCID != "" {
+			q.Enqueue(queue.Item{CID: *playCID})
 		}
 
-		log.Println("Playing … press Ctrl-C to stop")
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		for player.IsPlaying() {
-			select {
-			case <-sigCh:
-				player.Stop()
-				engine.Stop()
-				return
-			case <-time.After(500 * time.Millisecond):
+		// Enqueue additional CIDs from --queue flag.
+		if *queueCIDs != "" {
+			for _, cid := range splitCSV(*queueCIDs) {
+				if cid != "" {
+					q.Enqueue(queue.Item{CID: cid})
+				}
 			}
 		}
-		log.Println("Playback finished.")
+
+		player := audio.NewPlayer()
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		for {
+			item, ok := q.Next()
+			if !ok {
+				log.Println("Queue empty. Playback finished.")
+				break
+			}
+
+			log.Printf("Starting stream for CID %s …", item.CID)
+			if err := engine.StartStreaming(ctx, item.CID); err != nil {
+				log.Printf("start streaming %s: %v", item.CID, err)
+				continue
+			}
+			log.Printf("Streaming %s …", item.CID)
+
+			// Instant playback: wait for the minimum buffer before starting audio.
+			if err := waitForBuffer(ctx, engine, audio.InstantPlaybackChunks); err != nil {
+				log.Printf("buffer wait cancelled for %s", item.CID)
+				break
+			}
+
+			if err := player.Play(engine); err != nil {
+				log.Printf("play %s: %v", item.CID, err)
+				engine.Stop()
+				continue
+			}
+
+			// Gapless: preload next track when this one is nearing its end.
+			go preloadNext(ctx, q, engine, player)
+
+			log.Printf("Playing %s … press Ctrl-C to stop", item.CID)
+			for player.IsPlaying() {
+				select {
+				case <-sigCh:
+					player.Stop()
+					engine.Stop()
+					return
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
+			engine.Stop()
+		}
 		return
 	}
 
@@ -159,4 +200,54 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 	log.Println("Shutting down.")
+}
+
+// waitForBuffer blocks until at least minChunks have been received by engine,
+// or ctx is cancelled.  This implements instant-playback: audio starts after
+// a minimal initial buffer (≤ 0.5 s worth of data).
+func waitForBuffer(ctx context.Context, eng *streaming.Engine, minChunks int) error {
+	return eng.WaitForChunks(ctx, minChunks)
+}
+
+// preloadNext monitors the current track's remaining time and registers the
+// next track reader with the player for gapless transition.
+func preloadNext(ctx context.Context, q *queue.Queue, engine *streaming.Engine, player *audio.Player) {
+	doneCh := player.CurrentTrackDone()
+	if doneCh == nil {
+		return
+	}
+	// Wait until the current track signals "done" (fired when stream exhausted).
+	// For gapless we want to act 2 s before end; since we don't have exact
+	// duration info here, we arm on doneCh itself which fires at the boundary.
+	select {
+	case <-doneCh:
+	case <-ctx.Done():
+		return
+	}
+	// Try to preload the next item.
+	item, ok := q.Peek()
+	if !ok {
+		return
+	}
+	log.Printf("gapless: preloading next track %s", item.CID)
+	nextEngine := streaming.NewEngine(engine.Host(), engine.DHT(), engine.Storage(), engine.Scorer())
+	if err := nextEngine.StartStreaming(ctx, item.CID); err != nil {
+		log.Printf("gapless: failed to start next stream: %v", err)
+		return
+	}
+	player.SetNext(nextEngine)
+}
+
+// splitCSV splits a comma-separated string into trimmed tokens.
+func splitCSV(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			tok := strings.TrimSpace(s[start:i])
+			out = append(out, tok)
+			start = i + 1
+		}
+	}
+	return out
 }

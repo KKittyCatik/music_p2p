@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KKittyCatik/music_p2p/internal/bitrate"
+	"github.com/KKittyCatik/music_p2p/internal/connpool"
 	"github.com/KKittyCatik/music_p2p/internal/dht"
 	"github.com/KKittyCatik/music_p2p/internal/scheduler"
 	"github.com/KKittyCatik/music_p2p/internal/scoring"
@@ -19,7 +21,30 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-const musicProtocol = "/music/1.0.0"
+const (
+	musicProtocol = "/music/1.0.0"
+
+	// maxBufferChunks is the maximum number of chunks buffered ahead of nextRead.
+	maxBufferChunks = 50
+	// resumeBufferChunks is the threshold below which requesting resumes.
+	resumeBufferChunks = maxBufferChunks / 2
+
+	// stallTimeout is the time without a successful chunk before panic mode activates.
+	stallTimeout = 2 * time.Second
+)
+
+// bufPool reuses bytes.Buffer instances for ChunkBytes() to reduce allocations.
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+// readBufPool reuses byte slices for fetchChunk reads.
+var readBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 32*1024)
+		return &b
+	},
+}
 
 // Engine downloads chunks in parallel and exposes them as an io.Reader.
 type Engine struct {
@@ -27,15 +52,21 @@ type Engine struct {
 	dht     *dht.DHT
 	storage *storage.Storage
 	scorer  *scoring.Scorer
+	abr     *bitrate.AdaptiveBitrate
+	pool    *connpool.Pool
 
 	cancelFunc context.CancelFunc
 
 	mu          sync.Mutex
 	chunks      map[int][]byte // index → raw bytes
 	nextRead    int            // next chunk index for Read()
+	received    int            // total chunks fetched (including already consumed)
 	totalChunks int
 	cid         string
 	done        bool
+
+	// Anti-stall: time of last successful chunk receipt.
+	lastChunkTime time.Time
 
 	readCond *sync.Cond
 }
@@ -43,11 +74,14 @@ type Engine struct {
 // NewEngine constructs an Engine.
 func NewEngine(h p2phost.Host, dhtNode *dht.DHT, stor *storage.Storage, sc *scoring.Scorer) *Engine {
 	e := &Engine{
-		host:    h,
-		dht:     dhtNode,
-		storage: stor,
-		scorer:  sc,
-		chunks:  make(map[int][]byte),
+		host:          h,
+		dht:           dhtNode,
+		storage:       stor,
+		scorer:        sc,
+		abr:           bitrate.NewAdaptiveBitrate(),
+		pool:          connpool.New(h, musicProtocol),
+		chunks:        make(map[int][]byte),
+		lastChunkTime: time.Now(),
 	}
 	e.readCond = sync.NewCond(&e.mu)
 	return e
@@ -63,7 +97,7 @@ func (e *Engine) StartStreaming(ctx context.Context, cid string) error {
 		return fmt.Errorf("no providers found for %s", cid)
 	}
 
-	// Connect to providers
+	// Connect to providers.
 	for _, p := range providers {
 		if p.ID == e.host.ID() {
 			continue
@@ -74,7 +108,7 @@ func (e *Engine) StartStreaming(ctx context.Context, cid string) error {
 		}
 	}
 
-	// Query total chunks from the first reachable peer
+	// Query total chunks from the first reachable peer.
 	totalChunks, err := e.queryTotalChunks(ctx, cid, providers)
 	if err != nil {
 		return fmt.Errorf("query total chunks: %w", err)
@@ -83,9 +117,14 @@ func (e *Engine) StartStreaming(ctx context.Context, cid string) error {
 	e.mu.Lock()
 	e.cid = cid
 	e.totalChunks = totalChunks
+	e.nextRead = 0
+	e.received = 0
+	e.done = false
+	e.chunks = make(map[int][]byte)
+	e.lastChunkTime = time.Now()
 	e.mu.Unlock()
 
-	// Build chunk→peers map: for simplicity all providers advertise all chunks
+	// Build chunk→peers map: all providers advertise all chunks.
 	chunkPeers := make(map[int][]peer.ID)
 	for i := 0; i < totalChunks; i++ {
 		for _, p := range providers {
@@ -104,28 +143,84 @@ func (e *Engine) StartStreaming(ctx context.Context, cid string) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	e.cancelFunc = cancel
 
-	go e.downloadLoop(childCtx, sched, cid, totalChunks)
+	go e.downloadLoop(childCtx, sched, cid, totalChunks, providers)
 	return nil
 }
 
+// bufferAhead returns the number of chunks buffered strictly ahead of nextRead.
+// Must be called with e.mu held.
+func (e *Engine) bufferAhead() int {
+	count := 0
+	for idx := range e.chunks {
+		if idx >= e.nextRead {
+			count++
+		}
+	}
+	return count
+}
+
 // downloadLoop drives the scheduler and launches goroutines to fetch chunks.
-func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, cid string, total int) {
+func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, cid string, total int, providers []peer.AddrInfo) {
 	var wg sync.WaitGroup
+
+	// Collect all provider peer IDs for anti-stall.
+	var allPeers []peer.ID
+	for _, p := range providers {
+		if p.ID != e.host.ID() {
+			allPeers = append(allPeers, p.ID)
+		}
+	}
+
+	// Anti-stall ticker.
+	stallTicker := time.NewTicker(500 * time.Millisecond)
+	defer stallTicker.Stop()
+
+	panicMode := false
+
 	for {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
 			return
+		case <-stallTicker.C:
+			e.mu.Lock()
+			since := time.Since(e.lastChunkTime)
+			done := e.done
+			e.mu.Unlock()
+			if !done && since > stallTimeout {
+				if !panicMode {
+					log.Printf("streaming: stall detected (no chunks for %s), entering panic mode", since.Round(time.Millisecond))
+					panicMode = true
+					// Downgrade bitrate via ABR.
+					e.abr.MeasureBandwidth(0, stallTimeout)
+				}
+				// Retry all in-window chunks from any available peer.
+				sched.ResetTo(func() int {
+					e.mu.Lock()
+					defer e.mu.Unlock()
+					return e.nextRead
+				}())
+			} else if panicMode && since <= stallTimeout {
+				log.Printf("streaming: exiting panic mode")
+				panicMode = false
+			}
 		default:
 		}
 
+		// Backpressure: block when the buffer is full, waiting for Read() to consume.
+		e.mu.Lock()
+		for e.bufferAhead() >= maxBufferChunks {
+			e.readCond.Wait()
+		}
+		e.mu.Unlock()
+
 		requests := sched.NextRequests()
 		if len(requests) == 0 {
-			// Check if we are done
+			// Check if we are done: all chunks fetched.
 			e.mu.Lock()
-			completed := len(e.chunks)
+			allFetched := e.received >= total
 			e.mu.Unlock()
-			if completed >= total {
+			if allFetched {
 				e.mu.Lock()
 				e.done = true
 				e.mu.Unlock()
@@ -143,66 +238,89 @@ func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, c
 				defer wg.Done()
 				start := time.Now()
 				data, err := e.fetchChunk(ctx, r.Peer, r.CID, r.Index)
+				elapsed := time.Since(start)
 				if err != nil {
 					e.scorer.RecordFailure(r.Peer)
 					sched.MarkFailed(r.Index, r.Peer)
 					return
 				}
-				e.scorer.RecordSuccess(r.Peer, time.Since(start), len(data))
+				e.scorer.RecordSuccess(r.Peer, elapsed, len(data))
+				// Update ABR bandwidth estimate.
+				e.abr.MeasureBandwidth(len(data), elapsed)
 				sched.MarkCompleted(r.Index)
 
 				e.mu.Lock()
 				e.chunks[r.Index] = data
+				e.received++
+				e.lastChunkTime = time.Now()
+				pos := e.nextRead
 				e.mu.Unlock()
 				e.readCond.Broadcast()
 
-				// Advance playback window
-				e.mu.Lock()
-				pos := e.nextRead
-				e.mu.Unlock()
+				// Advance playback window.
 				sched.SetCurrentPosition(pos)
 			}(req)
 		}
 	}
 }
 
-// fetchChunk sends "GET <cid> <index>\n" to the peer and reads the response.
+// fetchChunk sends "GET <cid> <index>\n" to the peer using a pooled stream.
 func (e *Engine) fetchChunk(ctx context.Context, peerID peer.ID, cid string, index int) ([]byte, error) {
-	s, err := e.host.NewStream(ctx, peerID, musicProtocol)
+	s, err := e.pool.Acquire(ctx, peerID)
 	if err != nil {
-		return nil, fmt.Errorf("new stream to %s: %w", peerID, err)
+		return nil, fmt.Errorf("acquire stream to %s: %w", peerID, err)
 	}
-	defer s.Close()
 
-	fmt.Fprintf(s, "GET %s %d\n", cid, index)
+	hadError := false
+	defer func() {
+		e.pool.Release(peerID, s, hadError)
+	}()
+
+	if _, err := fmt.Fprintf(s, "GET %s %d\n", cid, index); err != nil {
+		hadError = true
+		return nil, fmt.Errorf("write request: %w", err)
+	}
 
 	reader := bufio.NewReader(s)
-	// Peek to check for error
+	// Peek to check for error response.
 	peek, err := reader.Peek(3)
 	if err != nil && err != io.EOF {
+		hadError = true
 		return nil, fmt.Errorf("peek response: %w", err)
 	}
 	if string(peek) == "ERR" {
+		hadError = true
 		return nil, fmt.Errorf("peer returned ERR for chunk %d", index)
 	}
 
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("read chunk data: %w", err)
+	// Use a pooled buffer for reading.
+	bufPtr := readBufPool.Get().(*[]byte)
+	defer readBufPool.Put(bufPtr)
+
+	var result []byte
+	for {
+		n, readErr := reader.Read(*bufPtr)
+		if n > 0 {
+			result = append(result, (*bufPtr)[:n]...)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			hadError = true
+			return nil, fmt.Errorf("read chunk data: %w", readErr)
+		}
 	}
-	return data, nil
+	return result, nil
 }
 
-// queryTotalChunks asks a provider how many chunks the track has by sending
-// "GET <cid> -1\n" as a metadata request; on ERR it falls back to checking
-// the local storage if available, then defaults to 1.
+// queryTotalChunks asks a provider how many chunks the track has.
 func (e *Engine) queryTotalChunks(ctx context.Context, cid string, providers []peer.AddrInfo) (int, error) {
-	// Check local storage first
+	// Check local storage first.
 	if n := e.storage.GetTotalChunks(cid); n > 0 {
 		return n, nil
 	}
 
-	// Ask first reachable provider using a TOTAL <cid> protocol message
 	for _, p := range providers {
 		if p.ID == e.host.ID() {
 			continue
@@ -240,6 +358,19 @@ func (e *Engine) Stop() {
 	}
 }
 
+// Seek resets the engine to start streaming from chunkIndex.
+// It clears the buffer, resets the read pointer, and wakes up any blocked Read().
+func (e *Engine) Seek(chunkIndex int) {
+	e.mu.Lock()
+	e.nextRead = chunkIndex
+	// Clear all buffered chunks.
+	e.chunks = make(map[int][]byte)
+	e.done = false
+	e.lastChunkTime = time.Now()
+	e.mu.Unlock()
+	e.readCond.Broadcast()
+}
+
 // Read implements io.Reader, returning buffered chunk data in order.
 // It blocks until the next chunk is available and returns io.EOF when done.
 func (e *Engine) Read(p []byte) (int, error) {
@@ -250,12 +381,14 @@ func (e *Engine) Read(p []byte) (int, error) {
 		if data, ok := e.chunks[e.nextRead]; ok {
 			n := copy(p, data)
 			if n < len(data) {
-				// Partial read: trim consumed bytes and leave remainder
+				// Partial read: trim consumed bytes and leave remainder.
 				e.chunks[e.nextRead] = data[n:]
 				return n, nil
 			}
 			delete(e.chunks, e.nextRead)
 			e.nextRead++
+			// Signal the download loop that buffer space is available.
+			e.readCond.Broadcast()
 			return n, nil
 		}
 		if e.done && e.nextRead >= e.totalChunks {
@@ -270,12 +403,19 @@ func (e *Engine) Read(p []byte) (int, error) {
 }
 
 // ChunkBytes returns the raw bytes for a single chunk by concatenating its frames.
+// It uses a sync.Pool to avoid allocating a new buffer on every call.
 func ChunkBytes(c storage.Chunk) []byte {
-	var buf bytes.Buffer
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+
 	for _, f := range c.Frames {
 		buf.Write(f)
 	}
-	return buf.Bytes()
+	// Copy to a fresh slice; the pool buffer will be reused.
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result
 }
 
 // ServeStream handles the music protocol stream for chunk/total requests.
@@ -314,3 +454,40 @@ func (e *Engine) ServeStream(s network.Stream) {
 	}
 	s.Write(ChunkBytes(chunk))
 }
+
+// AdaptiveBitrate returns the engine's ABR module (for external wiring if needed).
+func (e *Engine) AdaptiveBitrate() *bitrate.AdaptiveBitrate {
+	return e.abr
+}
+
+// WaitForChunks blocks until at least n chunks have been received, or ctx is
+// cancelled.  It is used to implement instant-playback: start audio only after
+// a minimal initial buffer is ready.
+func (e *Engine) WaitForChunks(ctx context.Context, n int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for {
+		if e.received >= n || e.done {
+			return nil
+		}
+		// Check context cancellation without holding the lock.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		e.readCond.Wait()
+	}
+}
+
+// Host returns the libp2p host used by this engine.
+func (e *Engine) Host() p2phost.Host { return e.host }
+
+// DHT returns the DHT used by this engine.
+func (e *Engine) DHT() *dht.DHT { return e.dht }
+
+// Storage returns the storage used by this engine.
+func (e *Engine) Storage() *storage.Storage { return e.storage }
+
+// Scorer returns the scorer used by this engine.
+func (e *Engine) Scorer() *scoring.Scorer { return e.scorer }
