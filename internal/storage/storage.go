@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -36,6 +37,8 @@ func New(baseDir string) *Storage {
 // LoadTrack reads the MP3 at path, hashes it, splits into frame-aligned chunks,
 // stores them in memory and returns the hex-encoded SHA-256 CID.
 func (s *Storage) LoadTrack(path string) (string, error) {
+	// Clean the path to prevent directory traversal.
+	path = filepath.Clean(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read file %q: %w", path, err)
@@ -76,6 +79,18 @@ func (s *Storage) GetTotalChunks(cidStr string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.tracks[cidStr])
+}
+
+// RemoveTrack removes a track and its chunks from local storage.
+// Returns an error if the track is not found.
+func (s *Storage) RemoveTrack(cidStr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tracks[cidStr]; !ok {
+		return fmt.Errorf("track %q not found", cidStr)
+	}
+	delete(s.tracks, cidStr)
+	return nil
 }
 
 // ListTracks returns the CIDs of all loaded tracks.

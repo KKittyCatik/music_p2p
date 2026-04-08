@@ -1,0 +1,760 @@
+basePath: /api/v1
+definitions:
+  github_com_KKittyCatik_music_p2p_internal_bitrate.Variant:
+    properties:
+      bitrate:
+        description: bits per second
+        type: integer
+      cid:
+        type: string
+      quality:
+        description: e.g. "128kbps", "256kbps", "320kbps"
+        type: string
+    type: object
+  github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata:
+    properties:
+      artist:
+        type: string
+      cid:
+        type: string
+      duration:
+        $ref: '#/definitions/time.Duration'
+      meta_id:
+        description: SHA-256(title + artist + duration)
+        type: string
+      title:
+        type: string
+      variants:
+        items:
+          $ref: '#/definitions/github_com_KKittyCatik_music_p2p_internal_bitrate.Variant'
+        type: array
+    type: object
+  internal_api.ConnectRequest:
+    properties:
+      multiaddr:
+        type: string
+    type: object
+  internal_api.EngineStatus:
+    properties:
+      active_streams:
+        type: integer
+      bandwidth_bps:
+        type: integer
+    type: object
+  internal_api.MetadataRequest:
+    properties:
+      artist:
+        type: string
+      cid:
+        type: string
+      duration:
+        $ref: '#/definitions/time.Duration'
+      title:
+        type: string
+    type: object
+  internal_api.PeerInfo:
+    properties:
+      id:
+        type: string
+      score:
+        type: number
+    type: object
+  internal_api.PlayRequest:
+    properties:
+      cid:
+        type: string
+    type: object
+  internal_api.PlaybackStatus:
+    properties:
+      buffer_level:
+        type: integer
+      chunk_index:
+        type: integer
+      cid:
+        type: string
+      playing:
+        type: boolean
+    type: object
+  internal_api.QueueItemRequest:
+    properties:
+      artist:
+        type: string
+      cid:
+        type: string
+      position:
+        description: for insert
+        type: integer
+      title:
+        type: string
+    type: object
+  internal_api.QueueItemResponse:
+    properties:
+      artist:
+        type: string
+      cid:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_api.QueueState:
+    properties:
+      current:
+        $ref: '#/definitions/internal_api.QueueItemResponse'
+      upcoming:
+        items:
+          $ref: '#/definitions/internal_api.QueueItemResponse'
+        type: array
+    type: object
+  internal_api.Response:
+    properties:
+      data: {}
+      error:
+        type: string
+      success:
+        type: boolean
+    type: object
+  internal_api.SeekRequest:
+    properties:
+      chunk_index:
+        type: integer
+    type: object
+  internal_api.ShareRequest:
+    properties:
+      announce:
+        type: boolean
+      path:
+        type: string
+    type: object
+  internal_api.StatusResponse:
+    properties:
+      connected_peers:
+        type: integer
+      listen_addrs:
+        items:
+          type: string
+        type: array
+      peer_id:
+        type: string
+      uptime_secs:
+        type: number
+    type: object
+  internal_api.TrackInfo:
+    properties:
+      chunk_count:
+        type: integer
+      cid:
+        type: string
+    type: object
+  time.Duration:
+    enum:
+    - -9223372036854775808
+    - 9223372036854775807
+    - 1
+    - 1000
+    - 1000000
+    - 1000000000
+    - 60000000000
+    - 3600000000000
+    - 1
+    - 1000
+    - 1000000
+    - 1000000000
+    - 60000000000
+    type: integer
+    x-enum-varnames:
+    - minDuration
+    - maxDuration
+    - Nanosecond
+    - Microsecond
+    - Millisecond
+    - Second
+    - Minute
+    - Hour
+    - Nanosecond
+    - Microsecond
+    - Millisecond
+    - Second
+    - Minute
+host: localhost:8080
+info:
+  contact: {}
+  description: P2P Music Streaming Node REST API
+  title: Music P2P API
+  version: "1.0"
+paths:
+  /dht/provide/{cid}:
+    post:
+      description: Announce the given CID to the DHT so other peers can find it.
+      parameters:
+      - description: Track CID
+        in: path
+        name: cid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: DHT provide
+      tags:
+      - dht
+  /dht/providers/{cid}:
+    get:
+      description: Find peers that have announced the given CID to the DHT.
+      parameters:
+      - description: Track CID
+        in: path
+        name: cid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/internal_api.PeerInfo'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: DHT providers
+      tags:
+      - dht
+  /engine/status:
+    get:
+      description: Returns the current bandwidth estimate and number of active streams.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.EngineStatus'
+              type: object
+      summary: Engine status
+      tags:
+      - engine
+  /metadata:
+    get:
+      description: Returns all locally known track metadata entries.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata'
+                  type: array
+              type: object
+      summary: List metadata
+      tags:
+      - metadata
+    post:
+      consumes:
+      - application/json
+      description: Store and broadcast a new TrackMetadata entry via gossipsub.
+      parameters:
+      - description: Metadata
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.MetadataRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Publish metadata
+      tags:
+      - metadata
+  /metadata/{cid}:
+    get:
+      description: Returns the TrackMetadata for the given CID.
+      parameters:
+      - description: Track CID
+        in: path
+        name: cid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Get metadata by CID
+      tags:
+      - metadata
+  /metadata/search:
+    get:
+      description: Case-insensitive search over track title and artist fields.
+      parameters:
+      - description: Search query
+        in: query
+        name: q
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata'
+                  type: array
+              type: object
+      summary: Search metadata
+      tags:
+      - metadata
+  /peers:
+    get:
+      description: Returns all currently connected peers along with their composite
+        score.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/internal_api.PeerInfo'
+                  type: array
+              type: object
+      summary: List peers
+      tags:
+      - peers
+  /peers/{peerID}/score:
+    get:
+      description: Returns the composite score for the given peer ID.
+      parameters:
+      - description: Peer ID
+        in: path
+        name: peerID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.PeerInfo'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Peer score
+      tags:
+      - peers
+  /peers/connect:
+    post:
+      consumes:
+      - application/json
+      description: Open a connection to the specified peer multiaddr.
+      parameters:
+      - description: Peer multiaddr
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.ConnectRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Connect to peer
+      tags:
+      - peers
+  /playback/play:
+    post:
+      consumes:
+      - application/json
+      description: Begin streaming the track identified by the given CID.
+      parameters:
+      - description: Play request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.PlayRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.PlaybackStatus'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Start playback
+      tags:
+      - playback
+  /playback/seek:
+    post:
+      consumes:
+      - application/json
+      description: Jump to the given chunk index within the current track.
+      parameters:
+      - description: Seek request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.SeekRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.PlaybackStatus'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Seek playback
+      tags:
+      - playback
+  /playback/status:
+    get:
+      description: Returns whether a track is playing, the current CID, position,
+        and buffer level.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.PlaybackStatus'
+              type: object
+      summary: Playback status
+      tags:
+      - playback
+  /playback/stop:
+    post:
+      description: Stop the currently playing track.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.PlaybackStatus'
+              type: object
+      summary: Stop playback
+      tags:
+      - playback
+  /queue:
+    delete:
+      description: Remove all upcoming items from the queue (history is preserved).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Clear queue
+      tags:
+      - queue
+    get:
+      description: Returns the current item, upcoming items, and play history.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.QueueState'
+              type: object
+      summary: Get queue
+      tags:
+      - queue
+    post:
+      consumes:
+      - application/json
+      description: Add a track to the end of the playback queue.
+      parameters:
+      - description: Queue item
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.QueueItemRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.QueueState'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Enqueue item
+      tags:
+      - queue
+  /queue/history:
+    get:
+      description: Returns all previously played items, oldest first.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/internal_api.QueueItemResponse'
+                  type: array
+              type: object
+      summary: Queue history
+      tags:
+      - queue
+  /queue/insert:
+    post:
+      consumes:
+      - application/json
+      description: Insert a track at the given position in the queue (0 = next to
+        play).
+      parameters:
+      - description: Queue item with position
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.QueueItemRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.QueueState'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Insert queue item
+      tags:
+      - queue
+  /status:
+    get:
+      description: Returns the node's peer ID, listen addresses, connected peer count,
+        and uptime.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.StatusResponse'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Node status
+      tags:
+      - node
+  /tracks:
+    get:
+      description: Returns the CID and chunk count for every locally stored track.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/internal_api.TrackInfo'
+                  type: array
+              type: object
+      summary: List tracks
+      tags:
+      - tracks
+  /tracks/{cid}:
+    delete:
+      description: Remove a track and all its chunks from local storage.
+      parameters:
+      - description: Track CID
+        in: path
+        name: cid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Delete a track
+      tags:
+      - tracks
+  /tracks/share:
+    post:
+      consumes:
+      - application/json
+      description: Load a local MP3 file into storage and optionally announce it to
+        the DHT.
+      parameters:
+      - description: Share request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.ShareRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/internal_api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/internal_api.TrackInfo'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Share a track
+      tags:
+      - tracks
+swagger: "2.0"

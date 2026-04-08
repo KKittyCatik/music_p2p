@@ -1,0 +1,1225 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "P2P Music Streaming Node REST API",
+        "title": "Music P2P API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api/v1",
+    "paths": {
+        "/dht/provide/{cid}": {
+            "post": {
+                "description": "Announce the given CID to the DHT so other peers can find it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dht"
+                ],
+                "summary": "DHT provide",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Track CID",
+                        "name": "cid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/dht/providers/{cid}": {
+            "get": {
+                "description": "Find peers that have announced the given CID to the DHT.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dht"
+                ],
+                "summary": "DHT providers",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Track CID",
+                        "name": "cid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api.PeerInfo"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/engine/status": {
+            "get": {
+                "description": "Returns the current bandwidth estimate and number of active streams.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "engine"
+                ],
+                "summary": "Engine status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.EngineStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/metadata": {
+            "get": {
+                "description": "Returns all locally known track metadata entries.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "List metadata",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Store and broadcast a new TrackMetadata entry via gossipsub.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "Publish metadata",
+                "parameters": [
+                    {
+                        "description": "Metadata",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.MetadataRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/metadata/search": {
+            "get": {
+                "description": "Case-insensitive search over track title and artist fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "Search metadata",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search query",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/metadata/{cid}": {
+            "get": {
+                "description": "Returns the TrackMetadata for the given CID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "Get metadata by CID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Track CID",
+                        "name": "cid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/peers": {
+            "get": {
+                "description": "Returns all currently connected peers along with their composite score.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "peers"
+                ],
+                "summary": "List peers",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api.PeerInfo"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/peers/connect": {
+            "post": {
+                "description": "Open a connection to the specified peer multiaddr.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "peers"
+                ],
+                "summary": "Connect to peer",
+                "parameters": [
+                    {
+                        "description": "Peer multiaddr",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ConnectRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/peers/{peerID}/score": {
+            "get": {
+                "description": "Returns the composite score for the given peer ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "peers"
+                ],
+                "summary": "Peer score",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Peer ID",
+                        "name": "peerID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.PeerInfo"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/playback/play": {
+            "post": {
+                "description": "Begin streaming the track identified by the given CID.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "playback"
+                ],
+                "summary": "Start playback",
+                "parameters": [
+                    {
+                        "description": "Play request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.PlayRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.PlaybackStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/playback/seek": {
+            "post": {
+                "description": "Jump to the given chunk index within the current track.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "playback"
+                ],
+                "summary": "Seek playback",
+                "parameters": [
+                    {
+                        "description": "Seek request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.SeekRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.PlaybackStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/playback/status": {
+            "get": {
+                "description": "Returns whether a track is playing, the current CID, position, and buffer level.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "playback"
+                ],
+                "summary": "Playback status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.PlaybackStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/playback/stop": {
+            "post": {
+                "description": "Stop the currently playing track.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "playback"
+                ],
+                "summary": "Stop playback",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.PlaybackStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/queue": {
+            "get": {
+                "description": "Returns the current item, upcoming items, and play history.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "queue"
+                ],
+                "summary": "Get queue",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.QueueState"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Add a track to the end of the playback queue.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "queue"
+                ],
+                "summary": "Enqueue item",
+                "parameters": [
+                    {
+                        "description": "Queue item",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.QueueItemRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.QueueState"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Remove all upcoming items from the queue (history is preserved).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "queue"
+                ],
+                "summary": "Clear queue",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/queue/history": {
+            "get": {
+                "description": "Returns all previously played items, oldest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "queue"
+                ],
+                "summary": "Queue history",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api.QueueItemResponse"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/queue/insert": {
+            "post": {
+                "description": "Insert a track at the given position in the queue (0 = next to play).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "queue"
+                ],
+                "summary": "Insert queue item",
+                "parameters": [
+                    {
+                        "description": "Queue item with position",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.QueueItemRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.QueueState"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/status": {
+            "get": {
+                "description": "Returns the node's peer ID, listen addresses, connected peer count, and uptime.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "node"
+                ],
+                "summary": "Node status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.StatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/tracks": {
+            "get": {
+                "description": "Returns the CID and chunk count for every locally stored track.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tracks"
+                ],
+                "summary": "List tracks",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/internal_api.TrackInfo"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/tracks/share": {
+            "post": {
+                "description": "Load a local MP3 file into storage and optionally announce it to the DHT.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tracks"
+                ],
+                "summary": "Share a track",
+                "parameters": [
+                    {
+                        "description": "Share request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ShareRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.TrackInfo"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/tracks/{cid}": {
+            "delete": {
+                "description": "Remove a track and all its chunks from local storage.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tracks"
+                ],
+                "summary": "Delete a track",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Track CID",
+                        "name": "cid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "github_com_KKittyCatik_music_p2p_internal_bitrate.Variant": {
+            "type": "object",
+            "properties": {
+                "bitrate": {
+                    "description": "bits per second",
+                    "type": "integer"
+                },
+                "cid": {
+                    "type": "string"
+                },
+                "quality": {
+                    "description": "e.g. \"128kbps\", \"256kbps\", \"320kbps\"",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_KKittyCatik_music_p2p_internal_metadata.TrackMetadata": {
+            "type": "object",
+            "properties": {
+                "artist": {
+                    "type": "string"
+                },
+                "cid": {
+                    "type": "string"
+                },
+                "duration": {
+                    "$ref": "#/definitions/time.Duration"
+                },
+                "meta_id": {
+                    "description": "SHA-256(title + artist + duration)",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_KKittyCatik_music_p2p_internal_bitrate.Variant"
+                    }
+                }
+            }
+        },
+        "internal_api.ConnectRequest": {
+            "type": "object",
+            "properties": {
+                "multiaddr": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.EngineStatus": {
+            "type": "object",
+            "properties": {
+                "active_streams": {
+                    "type": "integer"
+                },
+                "bandwidth_bps": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api.MetadataRequest": {
+            "type": "object",
+            "properties": {
+                "artist": {
+                    "type": "string"
+                },
+                "cid": {
+                    "type": "string"
+                },
+                "duration": {
+                    "$ref": "#/definitions/time.Duration"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.PeerInfo": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
+        "internal_api.PlayRequest": {
+            "type": "object",
+            "properties": {
+                "cid": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.PlaybackStatus": {
+            "type": "object",
+            "properties": {
+                "buffer_level": {
+                    "type": "integer"
+                },
+                "chunk_index": {
+                    "type": "integer"
+                },
+                "cid": {
+                    "type": "string"
+                },
+                "playing": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_api.QueueItemRequest": {
+            "type": "object",
+            "properties": {
+                "artist": {
+                    "type": "string"
+                },
+                "cid": {
+                    "type": "string"
+                },
+                "position": {
+                    "description": "for insert",
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.QueueItemResponse": {
+            "type": "object",
+            "properties": {
+                "artist": {
+                    "type": "string"
+                },
+                "cid": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.QueueState": {
+            "type": "object",
+            "properties": {
+                "current": {
+                    "$ref": "#/definitions/internal_api.QueueItemResponse"
+                },
+                "upcoming": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.QueueItemResponse"
+                    }
+                }
+            }
+        },
+        "internal_api.Response": {
+            "type": "object",
+            "properties": {
+                "data": {},
+                "error": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_api.SeekRequest": {
+            "type": "object",
+            "properties": {
+                "chunk_index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api.ShareRequest": {
+            "type": "object",
+            "properties": {
+                "announce": {
+                    "type": "boolean"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.StatusResponse": {
+            "type": "object",
+            "properties": {
+                "connected_peers": {
+                    "type": "integer"
+                },
+                "listen_addrs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "uptime_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "internal_api.TrackInfo": {
+            "type": "object",
+            "properties": {
+                "chunk_count": {
+                    "type": "integer"
+                },
+                "cid": {
+                    "type": "string"
+                }
+            }
+        },
+        "time.Duration": {
+            "type": "integer",
+            "enum": [
+                -9223372036854775808,
+                9223372036854775807,
+                1,
+                1000,
+                1000000,
+                1000000000,
+                60000000000,
+                3600000000000,
+                1,
+                1000,
+                1000000,
+                1000000000,
+                60000000000
+            ],
+            "x-enum-varnames": [
+                "minDuration",
+                "maxDuration",
+                "Nanosecond",
+                "Microsecond",
+                "Millisecond",
+                "Second",
+                "Minute",
+                "Hour",
+                "Nanosecond",
+                "Microsecond",
+                "Millisecond",
+                "Second",
+                "Minute"
+            ]
+        }
+    }
+}
