@@ -126,13 +126,18 @@ func TestClear(t *testing.T) {
 	q := queue.New()
 	q.Enqueue(itemA)
 	q.Enqueue(itemB)
+	q.Enqueue(itemC)
+
+	// Move A to history by calling Next twice (A→current, then A→history, B→current).
+	q.Next() //nolint:errcheck
 	q.Next() //nolint:errcheck
 
 	q.Clear()
 
-	assert.Equal(t, 0, q.Len())
-	// History should be intact.
-	assert.Equal(t, 0, len(q.History()))
+	assert.Equal(t, 0, q.Len(), "Clear removes upcoming items")
+	// History is preserved: itemA was added to history before Clear.
+	assert.Equal(t, 1, len(q.History()), "Clear must not touch history")
+	assert.Equal(t, itemA, q.History()[0])
 }
 
 func TestLen(t *testing.T) {

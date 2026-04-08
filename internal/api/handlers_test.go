@@ -7,12 +7,13 @@ import (
 "net/http/httptest"
 "testing"
 
+"github.com/stretchr/testify/assert"
+
 "github.com/KKittyCatik/music_p2p/internal/api"
 "github.com/KKittyCatik/music_p2p/internal/metadata"
 "github.com/KKittyCatik/music_p2p/internal/queue"
 "github.com/KKittyCatik/music_p2p/internal/scoring"
 "github.com/KKittyCatik/music_p2p/internal/storage"
-"github.com/stretchr/testify/assert"
 )
 
 // newTestServer creates an API server with lightweight real components.
@@ -166,8 +167,7 @@ assert.True(t, resp.Success)
 func TestInvalidEndpoint(t *testing.T) {
 srv := newTestServer(t)
 rr := doRequest(t, srv, http.MethodGet, "/api/v1/nonexistent", nil)
-// gorilla/mux returns 405 for known paths with wrong method,
-// and 404 for truly unknown paths.
+// gorilla/mux returns 404 for unknown paths.
 assert.True(t, rr.Code == http.StatusNotFound || rr.Code == http.StatusMethodNotAllowed)
 }
 

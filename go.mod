@@ -4,12 +4,16 @@ go 1.24
 
 require (
 	github.com/gopxl/beep v1.4.1
+	github.com/gorilla/mux v1.8.1
 	github.com/ipfs/go-cid v0.5.0
 	github.com/libp2p/go-libp2p v0.39.1
 	github.com/libp2p/go-libp2p-kad-dht v0.28.2
 	github.com/libp2p/go-libp2p-pubsub v0.15.0
 	github.com/multiformats/go-multiaddr v0.14.0
 	github.com/multiformats/go-multihash v0.2.3
+	github.com/stretchr/testify v1.10.0
+	github.com/swaggo/http-swagger v1.3.4
+	github.com/swaggo/swag v1.16.4
 )
 
 require (
@@ -40,7 +44,6 @@ require (
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/pprof v0.0.0-20250202011525-fc3143867406 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -125,10 +128,7 @@ require (
 	github.com/quic-go/webtransport-go v0.8.1-0.20241018022711-4ac2c9250e66 // indirect
 	github.com/raulk/go-watchdog v1.3.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/swaggo/files v0.0.0-20220610200504-28940afbdbfe // indirect
-	github.com/swaggo/http-swagger v1.3.4 // indirect
-	github.com/swaggo/swag v1.16.4 // indirect
 	github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opencensus.io v0.24.0 // indirect

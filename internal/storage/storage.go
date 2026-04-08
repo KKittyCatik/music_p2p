@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -36,6 +37,8 @@ func New(baseDir string) *Storage {
 // LoadTrack reads the MP3 at path, hashes it, splits into frame-aligned chunks,
 // stores them in memory and returns the hex-encoded SHA-256 CID.
 func (s *Storage) LoadTrack(path string) (string, error) {
+	// Clean the path to prevent directory traversal.
+	path = filepath.Clean(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read file %q: %w", path, err)
