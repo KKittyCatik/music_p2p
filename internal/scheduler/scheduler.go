@@ -9,15 +9,37 @@ import (
 )
 
 const (
-	maxInflight = 8
-	window      = 50
+	// initialMaxInflight is the starting concurrency limit.
+	initialMaxInflight = 8
+	// minMaxInflight is the floor for dynamic adjustment.
+	minMaxInflight = 2
+	// maxMaxInflight is the ceiling for dynamic adjustment.
+	maxMaxInflight = 32
+	// window is the total lookahead of chunks considered for scheduling.
+	window = 50
+
+	// Priority zone boundaries (distance from current position).
+	zoneCriticalEnd  = 5
+	zoneHighEnd      = 20
+	// Prefetch zone starts at zoneHighEnd and goes to window.
+
+	// congestionWindow is the number of recent outcomes tracked.
+	congestionWindow = 20
+)
+
+// priority levels for sorting.
+const (
+	priorityCritical = 0
+	priorityHigh     = 1
+	priorityPrefetch = 2
 )
 
 // ChunkRequest describes a single chunk fetch to dispatch.
 type ChunkRequest struct {
-	CID   string
-	Index int
-	Peer  peer.ID
+	CID      string
+	Index    int
+	Peer     peer.ID
+	Priority int // priorityCritical < priorityHigh < priorityPrefetch
 }
 
 // Scheduler decides which chunks to fetch from which peers.
@@ -33,16 +55,22 @@ type Scheduler struct {
 	completed  map[int]struct{}
 	// failed tracks per-chunk per-peer failures
 	failed map[int]map[peer.ID]struct{}
+
+	// Congestion-control state.
+	maxInflight    int
+	recentOutcomes []bool // true=success, false=failure (sliding window)
+	consecutiveFail int
 }
 
 // NewScheduler creates a Scheduler backed by the given Scorer.
 func NewScheduler(scorer *scoring.Scorer) *Scheduler {
 	return &Scheduler{
-		scorer:     scorer,
-		chunkPeers: make(map[int][]peer.ID),
-		inflight:   make(map[int]struct{}),
-		completed:  make(map[int]struct{}),
-		failed:     make(map[int]map[peer.ID]struct{}),
+		scorer:      scorer,
+		chunkPeers:  make(map[int][]peer.ID),
+		inflight:    make(map[int]struct{}),
+		completed:   make(map[int]struct{}),
+		failed:      make(map[int]map[peer.ID]struct{}),
+		maxInflight: initialMaxInflight,
 	}
 }
 
@@ -74,21 +102,74 @@ func (s *Scheduler) SetAvailableChunks(chunkPeers map[int][]peer.ID) {
 	s.chunkPeers = chunkPeers
 }
 
-// NextRequests returns up to maxInflight new ChunkRequests to dispatch.
-// Prioritisation: chunks closer to current position first; break ties by rarity (fewer peers).
+// recordOutcome appends to the sliding congestion window and adjusts maxInflight.
+// Must be called with s.mu held.
+func (s *Scheduler) recordOutcome(success bool) {
+	s.recentOutcomes = append(s.recentOutcomes, success)
+	if len(s.recentOutcomes) > congestionWindow {
+		s.recentOutcomes = s.recentOutcomes[1:]
+	}
+
+	if !success {
+		s.consecutiveFail++
+		// On consecutive failures, halve maxInflight (floor at minMaxInflight).
+		if s.consecutiveFail >= 3 {
+			s.maxInflight /= 2
+			if s.maxInflight < minMaxInflight {
+				s.maxInflight = minMaxInflight
+			}
+			s.consecutiveFail = 0
+		}
+		return
+	}
+	s.consecutiveFail = 0
+
+	// On sustained success in the window, ramp up slowly.
+	if len(s.recentOutcomes) >= congestionWindow {
+		successCount := 0
+		for _, ok := range s.recentOutcomes {
+			if ok {
+				successCount++
+			}
+		}
+		if float64(successCount)/float64(congestionWindow) >= 0.9 {
+			if s.maxInflight < maxMaxInflight {
+				s.maxInflight++
+			}
+		}
+	}
+}
+
+// chunkPriority returns the priority zone for a chunk at distance d from currentPos.
+func chunkPriority(d int) int {
+	switch {
+	case d < zoneCriticalEnd:
+		return priorityCritical
+	case d < zoneHighEnd:
+		return priorityHigh
+	default:
+		return priorityPrefetch
+	}
+}
+
+// NextRequests returns new ChunkRequests to dispatch, honouring the dynamic
+// maxInflight limit.  Critical-zone chunks may exceed the normal cap slightly
+// to ensure they are fetched ASAP.
 func (s *Scheduler) NextRequests() []ChunkRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	available := maxInflight - len(s.inflight)
+	available := s.maxInflight - len(s.inflight)
 	if available <= 0 {
-		return nil
+		// Allow critical chunks to go through even when at capacity.
+		available = 0
 	}
 
 	type candidate struct {
 		index    int
 		peers    []peer.ID
 		distance int
+		priority int
 	}
 
 	var candidates []candidate
@@ -108,7 +189,7 @@ func (s *Scheduler) NextRequests() []ChunkRequest {
 		if len(peers) == 0 {
 			continue
 		}
-		// Filter out peers that have already failed this chunk
+		// Filter out peers that have already failed this chunk.
 		var viable []peer.ID
 		for _, p := range peers {
 			if _, bad := s.failed[idx][p]; !bad {
@@ -118,24 +199,31 @@ func (s *Scheduler) NextRequests() []ChunkRequest {
 		if len(viable) == 0 {
 			continue
 		}
+		dist := idx - s.currentPos
 		candidates = append(candidates, candidate{
 			index:    idx,
 			peers:    viable,
-			distance: idx - s.currentPos,
+			distance: dist,
+			priority: chunkPriority(dist),
 		})
 	}
 
-	// Sort: closer distance first, then fewer peers (rarity)
+	// Sort: priority first (lower = more urgent), then distance, then rarity.
 	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].distance != candidates[j].distance {
-			return candidates[i].distance < candidates[j].distance
+		ci, cj := candidates[i], candidates[j]
+		if ci.priority != cj.priority {
+			return ci.priority < cj.priority
 		}
-		return len(candidates[i].peers) < len(candidates[j].peers)
+		if ci.distance != cj.distance {
+			return ci.distance < cj.distance
+		}
+		return len(ci.peers) < len(cj.peers)
 	})
 
 	var requests []ChunkRequest
 	for _, c := range candidates {
-		if len(requests) >= available {
+		// Critical chunks bypass the normal inflight cap to avoid stalls.
+		if c.priority != priorityCritical && len(requests) >= available {
 			break
 		}
 		best := s.scorer.BestPeers(1, c.peers)
@@ -143,24 +231,28 @@ func (s *Scheduler) NextRequests() []ChunkRequest {
 			continue
 		}
 		requests = append(requests, ChunkRequest{
-			CID:   s.cid,
-			Index: c.index,
-			Peer:  best[0],
+			CID:      s.cid,
+			Index:    c.index,
+			Peer:     best[0],
+			Priority: c.priority,
 		})
 		s.inflight[c.index] = struct{}{}
 	}
 	return requests
 }
 
-// MarkCompleted removes a chunk from inflight and records it as done.
+// MarkCompleted removes a chunk from inflight, records it as done, and
+// updates the congestion window.
 func (s *Scheduler) MarkCompleted(index int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.inflight, index)
 	s.completed[index] = struct{}{}
+	s.recordOutcome(true)
 }
 
-// MarkFailed removes a chunk from inflight and records the peer failure.
+// MarkFailed removes a chunk from inflight, records the peer failure, and
+// updates the congestion window.
 func (s *Scheduler) MarkFailed(index int, p peer.ID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -169,6 +261,7 @@ func (s *Scheduler) MarkFailed(index int, p peer.ID) {
 		s.failed[index] = make(map[peer.ID]struct{})
 	}
 	s.failed[index][p] = struct{}{}
+	s.recordOutcome(false)
 }
 
 // IsCompleted returns true if the chunk has been successfully downloaded.
@@ -177,4 +270,20 @@ func (s *Scheduler) IsCompleted(index int) bool {
 	defer s.mu.Unlock()
 	_, ok := s.completed[index]
 	return ok
+}
+
+// ResetTo resets the scheduler window and inflight state to start from pos.
+// Completed chunks are preserved.
+func (s *Scheduler) ResetTo(pos int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.currentPos = pos
+	s.inflight = make(map[int]struct{})
+}
+
+// MaxInflight returns the current dynamic concurrency limit.
+func (s *Scheduler) MaxInflight() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxInflight
 }
