@@ -5,12 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/KKittyCatik/music_p2p/internal/api"
 	"github.com/KKittyCatik/music_p2p/internal/audio"
 	internaldht "github.com/KKittyCatik/music_p2p/internal/dht"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
@@ -30,6 +32,7 @@ func main() {
 		sharePath   = flag.String("share", "", "path to a local MP3 file to share")
 		announce    = flag.Bool("announce", false, "announce shared tracks to the DHT")
 		queueCIDs   = flag.String("queue", "", "comma-separated list of CIDs to enqueue for autoplay")
+		apiPort     = flag.Int("api-port", 0, "port for the REST API server (0 = disabled)")
 	)
 	flag.Parse()
 
@@ -78,6 +81,29 @@ func main() {
 		}
 		return streaming.ChunkBytes(chunk), nil
 	})
+
+	// Shared playback queue (used by both CLI and API).
+	sharedQueue := queue.New()
+
+	// 7. Start REST API server if --api-port is set.
+	if *apiPort > 0 {
+		apiSrv := api.New(api.Config{
+			Storage:  stor,
+			Metadata: metaStore,
+			Queue:    sharedQueue,
+			Scorer:   sc,
+			Engine:   engine,
+			DHT:      dhtNode,
+			Host:     h,
+		})
+		apiAddr := fmt.Sprintf(":%d", *apiPort)
+		log.Printf("API server listening on %s", apiAddr)
+		go func() {
+			if err := apiSrv.Run(ctx, apiAddr); err != nil && err != http.ErrServerClosed {
+				log.Printf("api server: %v", err)
+			}
+		}()
+	}
 
 	// Connect to a peer if requested
 	if *connectAddr != "" {
@@ -130,7 +156,7 @@ func main() {
 
 	// --play / --queue: stream and play tracks
 	if *playCID != "" || *queueCIDs != "" {
-		q := queue.New()
+		q := sharedQueue
 
 		// Enqueue the primary CID first.
 		if *playCID != "" {

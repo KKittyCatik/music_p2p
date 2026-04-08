@@ -78,6 +78,18 @@ func (s *Storage) GetTotalChunks(cidStr string) int {
 	return len(s.tracks[cidStr])
 }
 
+// RemoveTrack removes a track and its chunks from local storage.
+// Returns an error if the track is not found.
+func (s *Storage) RemoveTrack(cidStr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tracks[cidStr]; !ok {
+		return fmt.Errorf("track %q not found", cidStr)
+	}
+	delete(s.tracks, cidStr)
+	return nil
+}
+
 // ListTracks returns the CIDs of all loaded tracks.
 func (s *Storage) ListTracks() []string {
 	s.mu.RLock()

@@ -75,6 +75,16 @@ type Store struct {
 	sub   *pubsub.Subscription
 }
 
+// NewLocalStore creates a metadata Store that only maintains a local in-memory
+// index, without gossipsub. Useful for testing and nodes that do not require
+// metadata broadcast.
+func NewLocalStore() *Store {
+	return &Store{
+		index:  make(map[string]TrackMetadata),
+		byMeta: make(map[string]TrackMetadata),
+	}
+}
+
 // NewStore creates a Store, sets up gossipsub, and starts listening for peer metadata.
 func NewStore(ctx context.Context, h host.Host) (*Store, error) {
 	ps, err := pubsub.NewGossipSub(ctx, h)
@@ -206,7 +216,11 @@ func (s *Store) upsert(meta TrackMetadata) {
 }
 
 // Publish signs meta and publishes the signed envelope on the gossipsub topic.
+// If the store was created without gossipsub (e.g. NewLocalStore), this is a no-op.
 func (s *Store) Publish(meta TrackMetadata) error {
+	if s.topic == nil || s.host == nil {
+		return nil
+	}
 	if meta.MetaID == "" {
 		meta.MetaID = ComputeMetaID(meta.Title, meta.Artist, meta.Duration)
 	}
