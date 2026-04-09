@@ -8,6 +8,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
+	"github.com/KKittyCatik/music_p2p/internal/metrics"
 	"github.com/KKittyCatik/music_p2p/internal/queue"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
@@ -258,6 +259,8 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	s.chunkIndex = 0
 	s.playMu.Unlock()
 
+	metrics.TracksPlayed.Inc()
+	metrics.PlaybackState.Set(1)
 	writeJSON(w, ok(s.playbackStatus()))
 }
 
@@ -276,6 +279,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.playMu.Lock()
 	s.isPlaying = false
 	s.playMu.Unlock()
+	metrics.PlaybackState.Set(0)
 	writeJSON(w, ok(s.playbackStatus()))
 }
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KKittyCatik/music_p2p/internal/metrics"
 	p2phost "github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -90,6 +91,8 @@ func (p *Pool) Acquire(ctx context.Context, peerID peer.ID) (network.Stream, err
 		if time.Since(is.idleSince) < maxIdleTimeout {
 			pp.active++
 			pp.mu.Unlock()
+			metrics.PoolActiveStreams.Inc()
+			metrics.PoolIdleStreams.Dec()
 			return is.stream, nil
 		}
 		// Expired – close it and try the next one.
@@ -105,6 +108,7 @@ func (p *Pool) Acquire(ctx context.Context, peerID peer.ID) (network.Stream, err
 	pp.mu.Lock()
 	pp.active++
 	pp.mu.Unlock()
+	metrics.PoolActiveStreams.Inc()
 	return s, nil
 }
 
@@ -121,9 +125,12 @@ func (p *Pool) Release(peerID peer.ID, s network.Stream, hadError bool) {
 
 	if hadError || len(pp.idle) >= maxStreamsPerPeer {
 		s.Close()
+		metrics.PoolActiveStreams.Dec()
 		return
 	}
 	pp.idle = append(pp.idle, idleStream{stream: s, idleSince: time.Now()})
+	metrics.PoolActiveStreams.Dec()
+	metrics.PoolIdleStreams.Inc()
 }
 
 // ActiveCount returns the number of streams currently in use for peerID.

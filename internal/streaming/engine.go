@@ -13,6 +13,7 @@ import (
 	"github.com/KKittyCatik/music_p2p/internal/bitrate"
 	"github.com/KKittyCatik/music_p2p/internal/connpool"
 	"github.com/KKittyCatik/music_p2p/internal/dht"
+	"github.com/KKittyCatik/music_p2p/internal/metrics"
 	"github.com/KKittyCatik/music_p2p/internal/scheduler"
 	"github.com/KKittyCatik/music_p2p/internal/scoring"
 	"github.com/KKittyCatik/music_p2p/internal/storage"
@@ -185,6 +186,7 @@ func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, c
 					if !inPanic {
 						log.Printf("streaming: stall detected (no chunks for %s), entering panic mode", since.Round(time.Millisecond))
 						inPanic = true
+						metrics.StallEvents.Inc()
 						// Downgrade bitrate via ABR.
 						e.abr.MeasureBandwidth(0, stallTimeout)
 					}
@@ -242,9 +244,12 @@ func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, c
 				if err != nil {
 					e.scorer.RecordFailure(r.Peer)
 					sched.MarkFailed(r.Index, r.Peer)
+					metrics.ChunksFailed.Inc()
 					return
 				}
 				e.scorer.RecordSuccess(r.Peer, elapsed, len(data))
+				metrics.ChunksDownloaded.Inc()
+				metrics.ChunkLatency.Observe(elapsed.Seconds())
 				// Update ABR bandwidth estimate.
 				e.abr.MeasureBandwidth(len(data), elapsed)
 				sched.MarkCompleted(r.Index)
@@ -254,7 +259,9 @@ func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, c
 				e.received++
 				e.lastChunkTime = time.Now()
 				pos := e.nextRead
+				buf := e.bufferAhead()
 				e.mu.Unlock()
+				metrics.BufferLevel.Set(float64(buf))
 				e.readCond.Broadcast()
 
 				// Advance playback window.
@@ -362,6 +369,7 @@ func (e *Engine) Stop() {
 // Seek resets the engine to start streaming from chunkIndex.
 // It clears the buffer, resets the read pointer, and wakes up any blocked Read().
 func (e *Engine) Seek(chunkIndex int) {
+	metrics.SeekEvents.Inc()
 	e.mu.Lock()
 	e.nextRead = chunkIndex
 	// Clear all buffered chunks.
