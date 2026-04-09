@@ -59,6 +59,8 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the written status code.
+// It initialises status to 200 (the HTTP default when WriteHeader is never
+// explicitly called), matching the behaviour of the net/http package itself.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int

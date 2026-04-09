@@ -259,9 +259,9 @@ func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, c
 				e.received++
 				e.lastChunkTime = time.Now()
 				pos := e.nextRead
-				buf := e.bufferAhead()
+				bufferLevel := e.bufferAhead()
 				e.mu.Unlock()
-				metrics.BufferLevel.Set(float64(buf))
+				metrics.BufferLevel.Set(float64(bufferLevel))
 				e.readCond.Broadcast()
 
 				// Advance playback window.
