@@ -97,6 +97,81 @@ go test ./...
 
 ---
 
+## Docker deployment
+
+### Default: single node
+
+`docker compose up` starts **only one** `music_p2p` node with ports:
+
+| Port (host→container) | Purpose |
+|-----------------------|---------|
+| `4001:4001` | P2P / libp2p |
+| `8080:8080` | REST API + Swagger |
+| `9090:9090` | Prometheus metrics |
+
+```bash
+# Build and start a single node
+make up
+# or
+docker compose up -d --build
+```
+
+The Prometheus / Grafana / Loki stack is **not started** by default.
+
+### Observability profile (optional)
+
+To also start Prometheus, Grafana and Loki:
+
+```bash
+make up-observability
+# or
+docker compose --profile observability up -d --build
+```
+
+| Service | URL |
+|---------|-----|
+| Grafana | http://localhost:3000 (admin / admin) |
+| Prometheus | http://localhost:9092 |
+| Loki | http://localhost:3100 |
+
+### Joining nodes across machines
+
+Each machine runs its own `docker compose up`. Nodes find each other through:
+
+1. **mDNS** – automatic discovery on the same LAN (no configuration needed).
+2. **Bootstrap** – for nodes on different networks, pass at least one known peer address via the `BOOTSTRAP_ADDRS` environment variable (comma-separated multiaddrs):
+
+```bash
+# Machine A – start first, note the peer ID printed in logs
+docker compose up -d
+
+# Machine B – bootstrap to Machine A
+BOOTSTRAP_ADDRS=/ip4/<IP_A>/tcp/4001/p2p/<PEER_ID_A> docker compose up -d
+
+# Machine C – any already-running node works as bootstrap
+BOOTSTRAP_ADDRS=/ip4/<IP_B>/tcp/4001/p2p/<PEER_ID_B> docker compose up -d
+```
+
+After the first connection, Kademlia DHT rendezvous (`music-p2p-network` namespace) propagates peer discovery automatically — subsequent nodes only need one bootstrap address.
+
+To disable mDNS (e.g. in cloud environments where multicast is unavailable):
+
+```bash
+NO_MDNS=1 BOOTSTRAP_ADDRS=... docker compose up -d
+```
+
+### Make targets
+
+| Target | Description |
+|--------|-------------|
+| `make up` | Start single `node` container |
+| `make up-observability` | Start node + Prometheus + Grafana + Loki |
+| `make down` | Stop and remove all containers and volumes |
+| `make logs` | Follow logs of the node container |
+| `make logs-observability` | Follow logs of all containers (with observability profile) |
+
+---
+
 ## Usage
 
 ### Share a local MP3 and announce it
