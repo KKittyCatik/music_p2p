@@ -114,7 +114,7 @@ func New(cfg Config) *Server {
 // routes registers all API routes.
 func (s *Server) routes() {
 	api := s.router.PathPrefix("/api/v1").Subrouter()
-	api.Use(corsMiddleware, jsonMiddleware, loggingMiddleware, recoveryMiddleware)
+	api.Use(corsMiddleware, jsonMiddleware, loggingMiddleware, recoveryMiddleware, metricsMiddleware)
 
 	// Node status
 	api.HandleFunc("/status", s.handleGetStatus).Methods(http.MethodGet)

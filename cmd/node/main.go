@@ -16,7 +16,9 @@ import (
 	"github.com/KKittyCatik/music_p2p/internal/audio"
 	internaldht "github.com/KKittyCatik/music_p2p/internal/dht"
 	"github.com/KKittyCatik/music_p2p/internal/discovery"
+	"github.com/KKittyCatik/music_p2p/internal/logging"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
+	"github.com/KKittyCatik/music_p2p/internal/metrics"
 	"github.com/KKittyCatik/music_p2p/internal/p2p"
 	"github.com/KKittyCatik/music_p2p/internal/queue"
 	"github.com/KKittyCatik/music_p2p/internal/scoring"
@@ -38,6 +40,8 @@ func main() {
 		bootstrapAddrs = flag.String("bootstrap", "", "comma-separated bootstrap peer multiaddrs")
 	)
 	flag.Parse()
+
+	logging.Init(*logLevel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

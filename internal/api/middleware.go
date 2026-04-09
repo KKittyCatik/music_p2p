@@ -1,10 +1,13 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"runtime/debug"
 	"time"
+
+	"github.com/KKittyCatik/music_p2p/internal/metrics"
 )
 
 // corsMiddleware adds permissive CORS headers so browser-based clients
@@ -52,5 +55,31 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 			}
 		}()
 		next.ServeHTTP(w, r)
+	})
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the written status code.
+// It initialises status to 200 (the HTTP default when WriteHeader is never
+// explicitly called), matching the behaviour of the net/http package itself.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
+}
+
+// metricsMiddleware records HTTPRequestsTotal and HTTPRequestDuration for every request.
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		dur := time.Since(start).Seconds()
+		statusStr := fmt.Sprintf("%d", rec.status)
+		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(dur)
 	})
 }
