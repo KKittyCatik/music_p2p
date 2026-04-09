@@ -1,4 +1,4 @@
-.PHONY: build run test lint docker-build up down logs swagger
+.PHONY: build run test lint docker-build up up-observability down logs logs-observability swagger
 
 build:
 	go build -o bin/music_p2p ./cmd/node
@@ -18,11 +18,17 @@ docker-build:
 up:
 	docker compose up -d --build
 
+up-observability:
+	docker compose --profile observability up -d --build
+
 down:
 	docker compose down -v
 
 logs:
-	docker compose logs -f
+	docker compose logs -f node
+
+logs-observability:
+	docker compose --profile observability logs -f
 
 swagger:
 	swag init -g internal/api/server.go -o docs/

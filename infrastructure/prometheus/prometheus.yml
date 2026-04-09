@@ -3,14 +3,8 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: 'music_p2p_node1'
+  - job_name: 'music_p2p'
     static_configs:
-      - targets: ['node1:9090']
+      - targets: ['node:9090']
         labels:
-          instance: 'node1'
-
-  - job_name: 'music_p2p_node2'
-    static_configs:
-      - targets: ['node2:9091']
-        labels:
-          instance: 'node2'
+          instance: 'node'

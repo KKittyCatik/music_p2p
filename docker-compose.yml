@@ -1,17 +1,18 @@
 services:
-  node1:
+  node:
     build: .
     image: music_p2p:latest
-    container_name: music_p2p_node1
+    container_name: music_p2p_node
+    environment:
+      - BOOTSTRAP_ADDRS=${BOOTSTRAP_ADDRS:-}
+      - NO_MDNS=${NO_MDNS:-}
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --listen
-      - "4001"
-      - --api-port
-      - "8080"
-      - --metrics-port
-      - "9090"
-      - --log-level
-      - "info"
+      - |
+        ARGS="--listen 4001 --api-port 8080 --metrics-port 9090 --log-level info"
+        if [ -n "$$BOOTSTRAP_ADDRS" ]; then ARGS="$$ARGS --bootstrap $$BOOTSTRAP_ADDRS"; fi
+        if [ "$$NO_MDNS" = "1" ] || [ "$$NO_MDNS" = "true" ]; then ARGS="$$ARGS --no-mdns"; fi
+        exec /app/music_p2p $$ARGS
     ports:
       - "4001:4001"
       - "8080:8080"
@@ -26,41 +27,11 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  node2:
-    build: .
-    image: music_p2p:latest
-    container_name: music_p2p_node2
-    command:
-      - --listen
-      - "4002"
-      - --api-port
-      - "8081"
-      - --metrics-port
-      - "9091"
-      - --log-level
-      - "info"
-      - --connect
-      - /ip4/node1/tcp/4001
-    ports:
-      - "4002:4002"
-      - "8081:8081"
-      - "9091:9091"
-    networks:
-      - music_net
-    depends_on:
-      node1:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/api/v1/status || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    restart: unless-stopped
-
   prometheus:
     image: prom/prometheus:latest
     container_name: music_p2p_prometheus
+    profiles:
+      - observability
     ports:
       - "9092:9090"
     volumes:
@@ -68,13 +39,14 @@ services:
     networks:
       - music_net
     depends_on:
-      - node1
-      - node2
+      - node
     restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
     container_name: music_p2p_grafana
+    profiles:
+      - observability
     ports:
       - "3000:3000"
     environment:
@@ -95,6 +67,8 @@ services:
   loki:
     image: grafana/loki:latest
     container_name: music_p2p_loki
+    profiles:
+      - observability
     ports:
       - "3100:3100"
     volumes:
