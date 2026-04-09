@@ -15,6 +15,7 @@ import (
 	"github.com/KKittyCatik/music_p2p/internal/api"
 	"github.com/KKittyCatik/music_p2p/internal/audio"
 	internaldht "github.com/KKittyCatik/music_p2p/internal/dht"
+	"github.com/KKittyCatik/music_p2p/internal/discovery"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
 	"github.com/KKittyCatik/music_p2p/internal/p2p"
 	"github.com/KKittyCatik/music_p2p/internal/queue"
@@ -25,14 +26,16 @@ import (
 
 func main() {
 	var (
-		listenPort  = flag.Int("listen", 4001, "TCP port to listen on")
-		connectAddr = flag.String("connect", "", "peer multiaddr to connect to")
-		playCID     = flag.String("play", "", "CID of the track to play")
-		searchQ     = flag.String("search", "", "search query for tracks")
-		sharePath   = flag.String("share", "", "path to a local MP3 file to share")
-		announce    = flag.Bool("announce", false, "announce shared tracks to the DHT")
-		queueCIDs   = flag.String("queue", "", "comma-separated list of CIDs to enqueue for autoplay")
-		apiPort     = flag.Int("api-port", 0, "port for the REST API server (0 = disabled)")
+		listenPort     = flag.Int("listen", 4001, "TCP port to listen on")
+		connectAddr    = flag.String("connect", "", "peer multiaddr to connect to (deprecated: use --bootstrap)")
+		playCID        = flag.String("play", "", "CID of the track to play")
+		searchQ        = flag.String("search", "", "search query for tracks")
+		sharePath      = flag.String("share", "", "path to a local MP3 file to share")
+		announce       = flag.Bool("announce", false, "announce shared tracks to the DHT")
+		queueCIDs      = flag.String("queue", "", "comma-separated list of CIDs to enqueue for autoplay")
+		apiPort        = flag.Int("api-port", 0, "port for the REST API server (0 = disabled)")
+		noMDNS         = flag.Bool("no-mdns", false, "disable mDNS LAN discovery")
+		bootstrapAddrs = flag.String("bootstrap", "", "comma-separated bootstrap peer multiaddrs")
 	)
 	flag.Parse()
 
@@ -105,14 +108,30 @@ func main() {
 		}()
 	}
 
-	// Connect to a peer if requested
-	if *connectAddr != "" {
-		if err := p2p.Connect(h, *connectAddr); err != nil {
-			log.Printf("connect to %s: %v", *connectAddr, err)
+	// 4a. mDNS discovery (LAN)
+	if !*noMDNS {
+		if err := discovery.StartMDNS(ctx, h); err != nil {
+			log.Printf("mdns discovery: %v", err)
 		} else {
-			log.Printf("Connected to %s", *connectAddr)
+			log.Println("mDNS discovery started")
 		}
 	}
+
+	// 4b. Bootstrap peers (--bootstrap and legacy --connect are both accepted)
+	var allBootstrap []string
+	if *bootstrapAddrs != "" {
+		allBootstrap = append(allBootstrap, splitCSV(*bootstrapAddrs)...)
+	}
+	if *connectAddr != "" {
+		allBootstrap = append(allBootstrap, *connectAddr)
+	}
+	if len(allBootstrap) > 0 {
+		n := discovery.Bootstrap(ctx, h, allBootstrap)
+		log.Printf("bootstrap: connected to %d/%d peers", n, len(allBootstrap))
+	}
+
+	// 4c. DHT rendezvous discovery
+	discovery.StartDHTDiscovery(ctx, h, dhtNode.IpfsDHT())
 
 	// --share: load and optionally announce a local MP3
 	if *sharePath != "" {
