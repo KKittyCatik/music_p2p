@@ -15,7 +15,9 @@ import (
 	"github.com/KKittyCatik/music_p2p/internal/api"
 	"github.com/KKittyCatik/music_p2p/internal/audio"
 	internaldht "github.com/KKittyCatik/music_p2p/internal/dht"
+	"github.com/KKittyCatik/music_p2p/internal/logging"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
+	"github.com/KKittyCatik/music_p2p/internal/metrics"
 	"github.com/KKittyCatik/music_p2p/internal/p2p"
 	"github.com/KKittyCatik/music_p2p/internal/queue"
 	"github.com/KKittyCatik/music_p2p/internal/scoring"
@@ -33,8 +35,12 @@ func main() {
 		announce    = flag.Bool("announce", false, "announce shared tracks to the DHT")
 		queueCIDs   = flag.String("queue", "", "comma-separated list of CIDs to enqueue for autoplay")
 		apiPort     = flag.Int("api-port", 0, "port for the REST API server (0 = disabled)")
+		metricsPort = flag.Int("metrics-port", 0, "port for the Prometheus metrics server (0 = disabled)")
+		logLevel    = flag.String("log-level", "info", "log level: debug, info, warn, error")
 	)
 	flag.Parse()
+
+	logging.Init(*logLevel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -105,12 +111,25 @@ func main() {
 		}()
 	}
 
+	// Start Prometheus metrics server if --metrics-port is set.
+	if *metricsPort > 0 {
+		metricsAddr := fmt.Sprintf(":%d", *metricsPort)
+		log.Printf("Metrics server listening on %s", metricsAddr)
+		go func() {
+			if err := metrics.StartMetricsServer(metricsAddr); err != nil {
+				log.Printf("metrics server: %v", err)
+			}
+		}()
+	}
+
 	// Connect to a peer if requested
 	if *connectAddr != "" {
 		if err := p2p.Connect(h, *connectAddr); err != nil {
 			log.Printf("connect to %s: %v", *connectAddr, err)
 		} else {
 			log.Printf("Connected to %s", *connectAddr)
+			metrics.PeersTotal.Inc()
+			metrics.PeersConnected.Set(float64(len(h.Network().Peers())))
 		}
 	}
 
