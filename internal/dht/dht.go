@@ -56,6 +56,11 @@ func (d *DHT) Provide(ctx context.Context, cidStr string) error {
 	return nil
 }
 
+// IpfsDHT returns the underlying *kaddht.IpfsDHT for use by the discovery package.
+func (d *DHT) IpfsDHT() *kaddht.IpfsDHT {
+	return d.dht
+}
+
 // FindProviders queries the DHT for peers that have the content identified by cidStr.
 func (d *DHT) FindProviders(ctx context.Context, cidStr string) ([]peer.AddrInfo, error) {
 	c, err := cidFromString(cidStr)
