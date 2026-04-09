@@ -8,9 +8,9 @@ import (
 
 // Item represents a single entry in the queue.
 type Item struct {
-	CID   string
-	Title string
-	Artist string
+	CID    string `json:"cid"`
+	Title  string `json:"title"`
+	Artist string `json:"artist"`
 }
 
 // Queue manages the ordered list of tracks to play, including history.

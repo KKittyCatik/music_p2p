@@ -10,6 +10,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -182,9 +183,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeJSON encodes v as JSON into w.
+// Any encoding error is logged; http.Error is intentionally not called here
+// because the response headers may already have been sent (e.g. from writeStatus).
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("api: JSON encode error: %v", err)
 	}
 }
 

@@ -163,47 +163,47 @@ func (e *Engine) bufferAhead() int {
 func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, cid string, total int, providers []peer.AddrInfo) {
 	var wg sync.WaitGroup
 
-	// Collect all provider peer IDs for anti-stall.
-	var allPeers []peer.ID
-	for _, p := range providers {
-		if p.ID != e.host.ID() {
-			allPeers = append(allPeers, p.ID)
+	// Anti-stall monitor runs in its own goroutine so that it continues to
+	// fire even when the download loop is blocked on backpressure
+	// (readCond.Wait). Without this separation, a full buffer combined with
+	// a stalled consumer would prevent the stall ticker from being serviced.
+	go func() {
+		stallTicker := time.NewTicker(500 * time.Millisecond)
+		defer stallTicker.Stop()
+		inPanic := false
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stallTicker.C:
+				e.mu.Lock()
+				since := time.Since(e.lastChunkTime)
+				done := e.done
+				pos := e.nextRead
+				e.mu.Unlock()
+				if !done && since > stallTimeout {
+					if !inPanic {
+						log.Printf("streaming: stall detected (no chunks for %s), entering panic mode", since.Round(time.Millisecond))
+						inPanic = true
+						// Downgrade bitrate via ABR.
+						e.abr.MeasureBandwidth(0, stallTimeout)
+					}
+					// Re-request all in-window chunks from any available peer.
+					sched.ResetTo(pos)
+				} else if inPanic && since <= stallTimeout {
+					log.Printf("streaming: exiting panic mode")
+					inPanic = false
+				}
+			}
 		}
-	}
-
-	// Anti-stall ticker.
-	stallTicker := time.NewTicker(500 * time.Millisecond)
-	defer stallTicker.Stop()
-
-	panicMode := false
+	}()
 
 	for {
+		// Check for context cancellation before each iteration.
 		select {
 		case <-ctx.Done():
 			wg.Wait()
 			return
-		case <-stallTicker.C:
-			e.mu.Lock()
-			since := time.Since(e.lastChunkTime)
-			done := e.done
-			e.mu.Unlock()
-			if !done && since > stallTimeout {
-				if !panicMode {
-					log.Printf("streaming: stall detected (no chunks for %s), entering panic mode", since.Round(time.Millisecond))
-					panicMode = true
-					// Downgrade bitrate via ABR.
-					e.abr.MeasureBandwidth(0, stallTimeout)
-				}
-				// Retry all in-window chunks from any available peer.
-				sched.ResetTo(func() int {
-					e.mu.Lock()
-					defer e.mu.Unlock()
-					return e.nextRead
-				}())
-			} else if panicMode && since <= stallTimeout {
-				log.Printf("streaming: exiting panic mode")
-				panicMode = false
-			}
 		default:
 		}
 
@@ -351,11 +351,12 @@ func (e *Engine) queryTotalFromPeer(ctx context.Context, peerID peer.ID, cid str
 	return n, nil
 }
 
-// Stop cancels the download context.
+// Stop cancels the download context and closes the connection pool.
 func (e *Engine) Stop() {
 	if e.cancelFunc != nil {
 		e.cancelFunc()
 	}
+	e.pool.Close()
 }
 
 // Seek resets the engine to start streaming from chunkIndex.

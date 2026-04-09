@@ -40,6 +40,9 @@ type Pool struct {
 
 	mu    sync.Mutex
 	peers map[peer.ID]*peerPool
+
+	closeOnce sync.Once
+	done      chan struct{}
 }
 
 // New creates a new Pool for the given host and protocol.
@@ -48,9 +51,15 @@ func New(h p2phost.Host, proto protocol.ID) *Pool {
 		host:     h,
 		protocol: proto,
 		peers:    make(map[peer.ID]*peerPool),
+		done:     make(chan struct{}),
 	}
 	go p.reapLoop()
 	return p
+}
+
+// Close stops the background reap goroutine and closes all idle streams.
+func (p *Pool) Close() {
+	p.closeOnce.Do(func() { close(p.done) })
 }
 
 // getOrCreatePeer returns the peerPool for the given peer, creating it if needed.
@@ -150,21 +159,26 @@ func (p *Pool) LeastLoadedPeer(candidates []peer.ID) peer.ID {
 func (p *Pool) reapLoop() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		p.mu.Lock()
-		for _, pp := range p.peers {
-			pp.mu.Lock()
-			var keep []idleStream
-			for _, is := range pp.idle {
-				if time.Since(is.idleSince) < maxIdleTimeout {
-					keep = append(keep, is)
-				} else {
-					is.stream.Close()
+	for {
+		select {
+		case <-p.done:
+			return
+		case <-ticker.C:
+			p.mu.Lock()
+			for _, pp := range p.peers {
+				pp.mu.Lock()
+				var keep []idleStream
+				for _, is := range pp.idle {
+					if time.Since(is.idleSince) < maxIdleTimeout {
+						keep = append(keep, is)
+					} else {
+						is.stream.Close()
+					}
 				}
+				pp.idle = keep
+				pp.mu.Unlock()
 			}
-			pp.idle = keep
-			pp.mu.Unlock()
+			p.mu.Unlock()
 		}
-		p.mu.Unlock()
 	}
 }
