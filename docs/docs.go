@@ -878,9 +878,9 @@ const docTemplate = `{
         },
         "/tracks/share": {
             "post": {
-                "description": "Load a local MP3 file into storage and optionally announce it to the DHT.",
+                "description": "Upload an MP3 file into storage and optionally announce it to the DHT.",
                 "consumes": [
-                    "application/json"
+                    "multipart/form-data"
                 ],
                 "produces": [
                     "application/json"
@@ -891,13 +891,17 @@ const docTemplate = `{
                 "summary": "Share a track",
                 "parameters": [
                     {
-                        "description": "Share request",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_api.ShareRequest"
-                        }
+                        "type": "file",
+                        "description": "MP3 File to upload",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Announce to DHT",
+                        "name": "announce",
+                        "in": "formData"
                     }
                 ],
                 "responses": {
