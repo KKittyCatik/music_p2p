@@ -724,16 +724,19 @@ paths:
   /tracks/share:
     post:
       consumes:
-      - application/json
-      description: Load a local MP3 file into storage and optionally announce it to
-        the DHT.
+      - multipart/form-data
+      description: Upload an MP3 file into storage and optionally announce it to the
+        DHT.
       parameters:
-      - description: Share request
-        in: body
-        name: body
+      - description: MP3 File to upload
+        in: formData
+        name: file
         required: true
-        schema:
-          $ref: '#/definitions/internal_api.ShareRequest'
+        type: file
+      - description: Announce to DHT
+        in: formData
+        name: announce
+        type: boolean
       produces:
       - application/json
       responses:

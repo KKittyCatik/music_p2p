@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -175,4 +176,45 @@ func TestMiddlewareContentType(t *testing.T) {
 	srv := newTestServer(t)
 	rr := doRequest(t, srv, http.MethodGet, "/api/v1/status", nil)
 	assert.Contains(t, rr.Header().Get("Content-Type"), "application/json")
+}
+
+func TestShareTrackMissingFile(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Send a multipart form with no "file" field – expect 400.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/share", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	resp := decodeResponse(t, rr)
+	assert.False(t, resp.Success)
+}
+
+func TestShareTrackWithFile(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Build a minimal valid MP3 multipart form (dummy bytes – storage will chunk it).
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "test.mp3")
+	assert.NoError(t, err)
+	// Write enough dummy bytes to produce at least one chunk.
+	fw.Write(bytes.Repeat([]byte{0xFF, 0xFB, 0x90, 0x00}, 512))
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/share", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	// The storage will accept any file; expect 201 Created.
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	resp := decodeResponse(t, rr)
+	assert.True(t, resp.Success)
 }

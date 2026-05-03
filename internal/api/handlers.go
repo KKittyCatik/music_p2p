@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -65,14 +67,15 @@ func (s *Server) handleGetTracks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ok(tracks))
 }
 
-// handleShareTrack loads a local MP3 file and optionally announces it.
+// handleShareTrack uploads an MP3 file, saves it temporarily, and optionally announces it.
 //
 // @Summary      Share a track
-// @Description  Load a local MP3 file into storage and optionally announce it to the DHT.
+// @Description  Upload an MP3 file into storage and optionally announce it to the DHT.
 // @Tags         tracks
-// @Accept       json
+// @Accept       multipart/form-data
 // @Produce      json
-// @Param        body  body      ShareRequest  true  "Share request"
+// @Param        file formData file true "MP3 File to upload"
+// @Param        announce formData bool false "Announce to DHT"
 // @Success      201   {object}  Response{data=TrackInfo}
 // @Failure      400   {object}  Response
 // @Failure      500   {object}  Response
@@ -82,26 +85,55 @@ func (s *Server) handleShareTrack(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, http.StatusServiceUnavailable, fail("storage not available"))
 		return
 	}
-	var req ShareRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeStatus(w, http.StatusBadRequest, fail("invalid request: "+err.Error()))
+
+	// Парсим multipart-форму (ограничение памяти 10 МБ)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		writeStatus(w, http.StatusBadRequest, fail("failed to parse form: "+err.Error()))
 		return
 	}
-	if req.Path == "" {
-		writeStatus(w, http.StatusBadRequest, fail("path is required"))
+
+	// Получаем файл из формы
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeStatus(w, http.StatusBadRequest, fail("file is required: "+err.Error()))
 		return
 	}
-	cid, err := s.stor.LoadTrack(req.Path)
+	defer file.Close()
+
+	// Получаем флаг announce
+	announce := r.FormValue("announce") == "true"
+
+	// Создаем временный файл в контейнере для сохранения загруженного MP3
+	tempFile, err := os.CreateTemp("", "upload-*.mp3")
+	if err != nil {
+		writeStatus(w, http.StatusInternalServerError, fail("failed to create temp file: "+err.Error()))
+		return
+	}
+	// Обязательно удаляем временный файл после загрузки в хранилище
+	defer os.Remove(tempFile.Name())
+
+	// Копируем содержимое загруженного файла во временный файл
+	if _, err := io.Copy(tempFile, file); err != nil {
+		tempFile.Close()
+		writeStatus(w, http.StatusInternalServerError, fail("failed to save file: "+err.Error()))
+		return
+	}
+	tempFile.Close()
+
+	// Вызываем уже существующий метод LoadTrack, передав путь к временному файлу
+	cid, err := s.stor.LoadTrack(tempFile.Name())
 	if err != nil {
 		writeStatus(w, http.StatusInternalServerError, fail("load track: "+err.Error()))
 		return
 	}
-	if req.Announce && s.dht != nil {
+
+	if announce && s.dht != nil {
 		if err := s.dht.Provide(r.Context(), cid); err != nil {
-			// Non-fatal – log and continue.
+			// Ошибка не фатальна – просто игнорируем/логируем
 			_ = err
 		}
 	}
+
 	info := TrackInfo{CID: cid, ChunkCount: s.stor.GetTotalChunks(cid)}
 	writeStatus(w, http.StatusCreated, ok(info))
 }
