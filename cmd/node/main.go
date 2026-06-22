@@ -38,6 +38,8 @@ func main() {
 		apiPort        = flag.Int("api-port", 0, "port for the REST API server (0 = disabled)")
 		noMDNS         = flag.Bool("no-mdns", false, "disable mDNS LAN discovery")
 		bootstrapAddrs = flag.String("bootstrap", "", "comma-separated bootstrap peer multiaddrs")
+		logLevel       = flag.String("log-level", "info", "log level: debug, info, warn, error")
+		metricsPort    = flag.Int("metrics-port", 0, "port for the Prometheus metrics server (0 = disabled)")
 	)
 	flag.Parse()
 
@@ -91,6 +93,17 @@ func main() {
 
 	// Shared playback queue (used by both CLI and API).
 	sharedQueue := queue.New()
+
+	// 7a. Start Prometheus metrics server if --metrics-port is set.
+	if *metricsPort > 0 {
+		metricsAddr := fmt.Sprintf(":%d", *metricsPort)
+		log.Printf("Metrics server listening on %s", metricsAddr)
+		go func() {
+			if err := metrics.StartMetricsServer(metricsAddr); err != nil {
+				log.Printf("metrics server: %v", err)
+			}
+		}()
+	}
 
 	// 7. Start REST API server if --api-port is set.
 	if *apiPort > 0 {

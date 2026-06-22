@@ -88,8 +88,25 @@ func NewEngine(h p2phost.Host, dhtNode *dht.DHT, stor *storage.Storage, sc *scor
 	return e
 }
 
-// StartStreaming begins downloading the track identified by cid from available peers.
+// StartStreaming begins downloading the track identified by cid.
+// If the track is already in local storage it is served directly without P2P.
 func (e *Engine) StartStreaming(ctx context.Context, cid string) error {
+	if n := e.storage.GetTotalChunks(cid); n > 0 {
+		childCtx, cancel := context.WithCancel(ctx)
+		e.mu.Lock()
+		e.cid = cid
+		e.totalChunks = n
+		e.nextRead = 0
+		e.received = 0
+		e.done = false
+		e.chunks = make(map[int][]byte)
+		e.lastChunkTime = time.Now()
+		e.cancelFunc = cancel
+		e.mu.Unlock()
+		go e.serveFromLocalStorage(childCtx, cid, n)
+		return nil
+	}
+
 	providers, err := e.dht.FindProviders(ctx, cid)
 	if err != nil {
 		return fmt.Errorf("find providers: %w", err)
@@ -158,6 +175,44 @@ func (e *Engine) bufferAhead() int {
 		}
 	}
 	return count
+}
+
+// serveFromLocalStorage feeds chunks directly from in-memory storage into the
+// read buffer, bypassing DHT and P2P entirely.
+func (e *Engine) serveFromLocalStorage(ctx context.Context, cid string, total int) {
+	for i := 0; i < total; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		chunk, err := e.storage.GetChunk(cid, i)
+		if err != nil {
+			log.Printf("streaming: local chunk %d missing for %s: %v", i, cid, err)
+			break
+		}
+		data := ChunkBytes(chunk)
+
+		e.mu.Lock()
+		for e.bufferAhead() >= maxBufferChunks {
+			e.readCond.Wait()
+			if ctx.Err() != nil {
+				e.mu.Unlock()
+				return
+			}
+		}
+		e.chunks[i] = data
+		e.received++
+		e.lastChunkTime = time.Now()
+		e.mu.Unlock()
+		e.readCond.Broadcast()
+	}
+
+	e.mu.Lock()
+	e.done = true
+	e.mu.Unlock()
+	e.readCond.Broadcast()
 }
 
 // downloadLoop drives the scheduler and launches goroutines to fetch chunks.

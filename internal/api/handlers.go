@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -93,7 +95,7 @@ func (s *Server) handleShareTrack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Получаем файл из формы
-	file, _, err := r.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeStatus(w, http.StatusBadRequest, fail("file is required: "+err.Error()))
 		return
@@ -127,9 +129,25 @@ func (s *Server) handleShareTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Сохраняем метаданные локально, используя имя загруженного файла как title.
+	if s.meta != nil {
+		title := strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename))
+		if title == "" {
+			title = cid[:8]
+		}
+		meta := metadata.TrackMetadata{
+			CID:    cid,
+			Title:  title,
+			Artist: "Unknown",
+		}
+		s.meta.AddLocal(meta)
+		if announce {
+			_ = s.meta.Publish(meta)
+		}
+	}
+
 	if announce && s.dht != nil {
 		if err := s.dht.Provide(r.Context(), cid); err != nil {
-			// Ошибка не фатальна – просто игнорируем/логируем
 			_ = err
 		}
 	}
