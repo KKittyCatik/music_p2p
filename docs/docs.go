@@ -972,6 +972,53 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/tracks/{cid}/stream": {
+            "get": {
+                "description": "Streams the track's MP3 audio bytes in playback order. Works for\nboth locally-stored tracks and tracks fetched from peers over P2P.\nPoint a browser \u003caudio\u003e element, VLC, or any HTTP media player at\nthis URL to listen. The response is chunked audio/mpeg.",
+                "produces": [
+                    "audio/mpeg"
+                ],
+                "tags": [
+                    "tracks"
+                ],
+                "summary": "Stream a track",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Track CID",
+                        "name": "cid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "MP3 audio stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -1156,17 +1203,6 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api.ShareRequest": {
-            "type": "object",
-            "properties": {
-                "announce": {
-                    "type": "boolean"
-                },
-                "path": {
-                    "type": "string"
-                }
-            }
-        },
         "internal_api.StatusResponse": {
             "type": "object",
             "properties": {
@@ -1208,12 +1244,7 @@ const docTemplate = `{
                 1000000,
                 1000000000,
                 60000000000,
-                3600000000000,
-                1,
-                1000,
-                1000000,
-                1000000000,
-                60000000000
+                3600000000000
             ],
             "x-enum-varnames": [
                 "minDuration",
@@ -1223,12 +1254,7 @@ const docTemplate = `{
                 "Millisecond",
                 "Second",
                 "Minute",
-                "Hour",
-                "Nanosecond",
-                "Microsecond",
-                "Millisecond",
-                "Second",
-                "Minute"
+                "Hour"
             ]
         }
     }
@@ -1236,12 +1262,12 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
-	Host:             "localhost:8080",
-	BasePath:         "/api/v1",
+	Version:          "",
+	Host:             "",
+	BasePath:         "",
 	Schemes:          []string{},
-	Title:            "Music P2P API",
-	Description:      "P2P Music Streaming Node REST API",
+	Title:            "",
+	Description:      "",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

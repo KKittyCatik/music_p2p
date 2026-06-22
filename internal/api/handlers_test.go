@@ -2,10 +2,13 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -176,6 +179,44 @@ func TestMiddlewareContentType(t *testing.T) {
 	srv := newTestServer(t)
 	rr := doRequest(t, srv, http.MethodGet, "/api/v1/status", nil)
 	assert.Contains(t, rr.Header().Get("Content-Type"), "application/json")
+}
+
+func TestStreamTrackSuccess(t *testing.T) {
+	const audio = "fake-mp3-audio-bytes-0123456789"
+	srv := api.New(api.Config{
+		Storage:  storage.New(t.TempDir()),
+		Metadata: metadata.NewLocalStore(),
+		Queue:    queue.New(),
+		Scorer:   scoring.NewScorer(),
+		NewStream: func(ctx context.Context, cid string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(audio)), nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/abc123/stream", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "audio/mpeg", rr.Header().Get("Content-Type"))
+	assert.Equal(t, audio, rr.Body.String())
+}
+
+func TestStreamTrackInvalidCID(t *testing.T) {
+	srv := newTestServer(t)
+	// Uppercase letters are not valid lowercase hex – expect 400.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/NOTHEX/stream", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestStreamTrackUnavailable(t *testing.T) {
+	srv := newTestServer(t) // no NewStream wired
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/abc123/stream", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
 func TestShareTrackMissingFile(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,14 +39,6 @@ const (
 // bufPool reuses bytes.Buffer instances for ChunkBytes() to reduce allocations.
 var bufPool = sync.Pool{
 	New: func() any { return new(bytes.Buffer) },
-}
-
-// readBufPool reuses byte slices for fetchChunk reads.
-var readBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 32*1024)
-		return &b
-	},
 }
 
 // Engine downloads chunks in parallel and exposes them as an io.Reader.
@@ -309,10 +303,11 @@ func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, c
 				e.abr.MeasureBandwidth(len(data), elapsed)
 				sched.MarkCompleted(r.Index)
 
+				if !e.acceptChunk(r.Index, data) {
+					return // duplicate – already consumed or buffered
+				}
+
 				e.mu.Lock()
-				e.chunks[r.Index] = data
-				e.received++
-				e.lastChunkTime = time.Now()
 				pos := e.nextRead
 				bufferLevel := e.bufferAhead()
 				e.mu.Unlock()
@@ -326,54 +321,68 @@ func (e *Engine) downloadLoop(ctx context.Context, sched *scheduler.Scheduler, c
 	}
 }
 
-// fetchChunk sends "GET <cid> <index>\n" to the peer using a pooled stream.
+// acceptChunk stores a freshly fetched chunk and reports whether it was new.
+// Duplicates are dropped: a chunk is a duplicate if its index is below the read
+// pointer (already consumed) or is already buffered. The anti-stall ResetTo
+// clears the scheduler's inflight set, so a slow chunk can be re-dispatched and
+// arrive twice; counting it again would inflate `received`, flip `done` early,
+// and truncate the stream. Deduplicating here keeps `received` exact.
+func (e *Engine) acceptChunk(index int, data []byte) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if index < e.nextRead {
+		return false
+	}
+	if _, exists := e.chunks[index]; exists {
+		return false
+	}
+	e.chunks[index] = data
+	e.received++
+	e.lastChunkTime = time.Now()
+	return true
+}
+
+// fetchChunk sends "GET <cid> <index>\n" to the peer over a pooled stream and
+// reads a length-framed response: "<len>\n" followed by exactly <len> raw bytes.
+// A length of -1 signals a peer-side error. The persistent reader carried by the
+// pooled stream lets the same stream serve many requests across reuse cycles.
 func (e *Engine) fetchChunk(ctx context.Context, peerID peer.ID, cid string, index int) ([]byte, error) {
-	s, err := e.pool.Acquire(ctx, peerID)
+	ps, err := e.pool.Acquire(ctx, peerID)
 	if err != nil {
 		return nil, fmt.Errorf("acquire stream to %s: %w", peerID, err)
 	}
 
 	hadError := false
 	defer func() {
-		e.pool.Release(peerID, s, hadError)
+		e.pool.Release(peerID, ps, hadError)
 	}()
 
-	if _, err := fmt.Fprintf(s, "GET %s %d\n", cid, index); err != nil {
+	if _, err := fmt.Fprintf(ps, "GET %s %d\n", cid, index); err != nil {
 		hadError = true
 		return nil, fmt.Errorf("write request: %w", err)
 	}
 
-	reader := bufio.NewReader(s)
-	// Peek to check for error response.
-	peek, err := reader.Peek(3)
-	if err != nil && err != io.EOF {
+	lenLine, err := ps.Reader.ReadString('\n')
+	if err != nil {
 		hadError = true
-		return nil, fmt.Errorf("peek response: %w", err)
+		return nil, fmt.Errorf("read length: %w", err)
 	}
-	if string(peek) == "ERR" {
+	n, err := strconv.Atoi(strings.TrimSpace(lenLine))
+	if err != nil {
 		hadError = true
-		return nil, fmt.Errorf("peer returned ERR for chunk %d", index)
+		return nil, fmt.Errorf("parse length %q: %w", lenLine, err)
+	}
+	if n < 0 {
+		hadError = true
+		return nil, fmt.Errorf("peer returned error for chunk %d", index)
 	}
 
-	// Use a pooled buffer for reading.
-	bufPtr := readBufPool.Get().(*[]byte)
-	defer readBufPool.Put(bufPtr)
-
-	var result []byte
-	for {
-		n, readErr := reader.Read(*bufPtr)
-		if n > 0 {
-			result = append(result, (*bufPtr)[:n]...)
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			hadError = true
-			return nil, fmt.Errorf("read chunk data: %w", readErr)
-		}
+	data := make([]byte, n)
+	if _, err := io.ReadFull(ps.Reader, data); err != nil {
+		hadError = true
+		return nil, fmt.Errorf("read chunk data: %w", err)
 	}
-	return result, nil
+	return data, nil
 }
 
 // queryTotalChunks asks a provider how many chunks the track has.
@@ -403,12 +412,16 @@ func (e *Engine) queryTotalFromPeer(ctx context.Context, peerID peer.ID, cid str
 	}
 	defer s.Close()
 
-	fmt.Fprintf(s, "TOTAL %s\n", cid)
-
-	var n int
-	_, err = fmt.Fscanf(s, "%d\n", &n)
+	if _, err := fmt.Fprintf(s, "TOTAL %s\n", cid); err != nil {
+		return 0, err
+	}
+	line, err := bufio.NewReader(s).ReadString('\n')
 	if err != nil {
 		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		return 0, fmt.Errorf("parse total %q: %w", line, err)
 	}
 	return n, nil
 }
@@ -482,41 +495,48 @@ func ChunkBytes(c storage.Chunk) []byte {
 	return result
 }
 
-// ServeStream handles the music protocol stream for chunk/total requests.
-// Register this via host.SetStreamHandler(musicProtocol, engine.ServeStream).
+// ServeStream handles the music protocol. It loops over multiple requests on a
+// single stream so the peer's connection pool can reuse it. Replies are
+// length-framed: for GET it writes "<len>\n" then exactly <len> bytes (or
+// "-1\n" on error); for TOTAL it writes "<n>\n". The loop ends when the remote
+// closes the stream (EOF). Register via host.SetStreamHandler(musicProtocol, e.ServeStream).
 func (e *Engine) ServeStream(s network.Stream) {
 	defer s.Close()
 
-	scanner := bufio.NewScanner(s)
-	if !scanner.Scan() {
-		return
-	}
-	line := scanner.Text()
+	reader := bufio.NewReader(s)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return // remote closed the stream or read error
+		}
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 0 {
+			continue
+		}
 
-	var cmd, cidStr string
-	var index int
+		switch {
+		case fields[0] == "TOTAL" && len(fields) == 2:
+			fmt.Fprintf(s, "%d\n", e.storage.GetTotalChunks(fields[1]))
 
-	if n, _ := fmt.Sscanf(line, "TOTAL %s", &cidStr); n == 1 {
-		total := e.storage.GetTotalChunks(cidStr)
-		fmt.Fprintf(s, "%d\n", total)
-		return
-	}
+		case fields[0] == "GET" && len(fields) == 3:
+			index, err := strconv.Atoi(fields[2])
+			if err != nil {
+				fmt.Fprintf(s, "-1\n")
+				continue
+			}
+			chunk, err := e.storage.GetChunk(fields[1], index)
+			if err != nil {
+				fmt.Fprintf(s, "-1\n")
+				continue
+			}
+			data := ChunkBytes(chunk)
+			fmt.Fprintf(s, "%d\n", len(data))
+			s.Write(data)
 
-	if n, _ := fmt.Sscanf(line, "GET %s %d", &cidStr, &index); n == 2 {
-		cmd = "GET"
+		default:
+			fmt.Fprintf(s, "-1\n")
+		}
 	}
-
-	if cmd != "GET" {
-		fmt.Fprintf(s, "ERR\n")
-		return
-	}
-
-	chunk, err := e.storage.GetChunk(cidStr, index)
-	if err != nil {
-		fmt.Fprintf(s, "ERR\n")
-		return
-	}
-	s.Write(ChunkBytes(chunk))
 }
 
 // AdaptiveBitrate returns the engine's ABR module (for external wiring if needed).
@@ -543,6 +563,22 @@ func (e *Engine) WaitForChunks(ctx context.Context, n int) error {
 		e.readCond.Wait()
 	}
 }
+
+// ReadCloser adapts an Engine to io.ReadCloser. Close stops the underlying
+// download and releases the connection pool, making the engine suitable for
+// streaming over a single HTTP response.
+type ReadCloser struct {
+	*Engine
+}
+
+// Close stops the engine's download loop and connection pool.
+func (rc ReadCloser) Close() error {
+	rc.Engine.Stop()
+	return nil
+}
+
+// NewReadCloser wraps an already-started engine as an io.ReadCloser.
+func NewReadCloser(e *Engine) ReadCloser { return ReadCloser{e} }
 
 // Host returns the libp2p host used by this engine.
 func (e *Engine) Host() p2phost.Host { return e.host }

@@ -243,7 +243,8 @@ All endpoints are prefixed with `/api/v1`. Responses are JSON with the shape `{"
 |--------|------|-------------|
 | `GET` | `/status` | Node status (ID, uptime, peer count) |
 | `GET` | `/tracks` | List all locally stored tracks |
-| `POST` | `/tracks/share` | Share a local MP3 file (body: `{"path": "..."}`) |
+| `POST` | `/tracks/share` | Upload & share an MP3 (multipart/form-data: `file`, optional `announce=true`) |
+| `GET` | `/tracks/{cid}/stream` | **Stream the track's MP3 audio** (works for local & P2P tracks; point a browser/VLC at it to listen) |
 | `DELETE` | `/tracks/{cid}` | Remove a track from local storage |
 | `GET` | `/metadata` | All metadata entries |
 | `GET` | `/metadata/search?q=` | Search by title/artist (case-insensitive) |
@@ -259,12 +260,41 @@ All endpoints are prefixed with `/api/v1`. Responses are JSON with the shape `{"
 | `DELETE` | `/queue` | Clear the upcoming queue |
 | `GET` | `/queue/history` | Play history (oldest first) |
 | `GET` | `/peers` | Connected peers with scoring data |
-| `POST` | `/peers/connect` | Connect to a peer (body: `{"addr": "/ip4/..."}`) |
+| `POST` | `/peers/connect` | Connect to a peer (body: `{"multiaddr": "/ip4/..."}`) |
 | `GET` | `/peers/{peerID}/score` | Scoring details for a specific peer |
 | `POST` | `/dht/provide/{cid}` | Announce a CID to the DHT |
 | `GET` | `/dht/providers/{cid}` | Find providers for a CID |
 | `GET` | `/engine/status` | Streaming engine stats (chunks buffered, ABR bitrate) |
 | `GET` | `/swagger/*` | Interactive Swagger UI |
+
+---
+
+## Quickstart: share on one node, listen on another (over HTTP)
+
+No audio hardware required on either node — you listen by pointing any HTTP media
+player (browser `<audio>`, VLC, `ffplay`, `mpv`) at the streaming endpoint.
+
+```bash
+# Node A — share a track and announce it to the network
+curl -X POST http://NODE_A:8080/api/v1/tracks/share \
+  -F "file=@song.mp3" -F "announce=true"
+# → {"success":true,"data":{"cid":"<CID>","chunk_count":426}}
+
+# Node B — connect to A (or rely on mDNS/bootstrap), then discover what's shared
+curl -X POST http://NODE_B:8080/api/v1/peers/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"multiaddr":"/ip4/<IP_A>/tcp/4001/p2p/<PEER_ID_A>"}'
+
+curl http://NODE_B:8080/api/v1/metadata          # browse tracks gossiped from peers
+# → find the <CID> you want
+
+# Node B — listen: stream the track over P2P straight into your player
+ffplay  http://NODE_B:8080/api/v1/tracks/<CID>/stream
+# or open the same URL in a browser, or:  curl ... -o song.mp3
+```
+
+The streaming endpoint serves locally-stored tracks directly and fetches remote
+tracks from peers on demand, returning a continuous `audio/mpeg` byte stream.
 
 ---
 

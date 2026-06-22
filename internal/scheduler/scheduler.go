@@ -196,8 +196,14 @@ func (s *Scheduler) NextRequests() []ChunkRequest {
 				viable = append(viable, p)
 			}
 		}
+		// Liveness: if every known peer has failed this chunk, clear the
+		// failure set and retry them all. Permanently blacklisting the only
+		// provider after a single transient error would stall the stream
+		// forever; retrying guarantees forward progress as long as at least
+		// one peer remains connected.
 		if len(viable) == 0 {
-			continue
+			delete(s.failed, idx)
+			viable = append(viable, peers...)
 		}
 		dist := idx - s.currentPos
 		candidates = append(candidates, candidate{

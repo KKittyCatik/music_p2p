@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -154,6 +155,52 @@ func (s *Server) handleShareTrack(w http.ResponseWriter, r *http.Request) {
 
 	info := TrackInfo{CID: cid, ChunkCount: s.stor.GetTotalChunks(cid)}
 	writeStatus(w, http.StatusCreated, ok(info))
+}
+
+// handleStreamTrack streams the raw MP3 audio bytes for a track over HTTP.
+//
+// @Summary      Stream a track
+// @Description  Streams the track's MP3 audio bytes in playback order. Works for
+// @Description  both locally-stored tracks and tracks fetched from peers over P2P.
+// @Description  Point a browser <audio> element, VLC, or any HTTP media player at
+// @Description  this URL to listen. The response is chunked audio/mpeg.
+// @Tags         tracks
+// @Produce      audio/mpeg
+// @Param        cid  path  string  true  "Track CID"
+// @Success      200  {string}  binary  "MP3 audio stream"
+// @Failure      404  {object}  Response
+// @Failure      500  {object}  Response
+// @Failure      503  {object}  Response
+// @Router       /tracks/{cid}/stream [get]
+func (s *Server) handleStreamTrack(w http.ResponseWriter, r *http.Request) {
+	cid := mux.Vars(r)["cid"]
+	if !isHexCID(cid) {
+		writeStatus(w, http.StatusBadRequest, fail("invalid cid"))
+		return
+	}
+	if s.newStream == nil {
+		writeStatus(w, http.StatusServiceUnavailable, fail("streaming not available"))
+		return
+	}
+
+	rc, err := s.newStream(r.Context(), cid)
+	if err != nil {
+		writeStatus(w, http.StatusInternalServerError, fail("stream: "+err.Error()))
+		return
+	}
+	defer rc.Close()
+
+	// Override the application/json content type set by jsonMiddleware.
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Cache-Control", "no-store")
+	metrics.TracksPlayed.Inc()
+	metrics.PlaybackState.Set(1)
+	defer metrics.PlaybackState.Set(0)
+
+	if _, err := io.Copy(w, rc); err != nil {
+		// Client disconnect or truncated stream — log and move on.
+		log.Printf("api: stream %s ended: %v", cid, err)
+	}
 }
 
 // handleDeleteTrack removes a track from local storage.
@@ -666,4 +713,18 @@ func (s *Server) handleEngineStatus(w http.ResponseWriter, r *http.Request) {
 // toQueueItemResponse converts a queue.Item to a QueueItemResponse.
 func toQueueItemResponse(item queue.Item) QueueItemResponse {
 	return QueueItemResponse{CID: item.CID, Title: item.Title, Artist: item.Artist}
+}
+
+// isHexCID reports whether s is a non-empty lowercase hex string, as produced by
+// hex(SHA-256(file)). Used to reject malformed CIDs from untrusted callers.
+func isHexCID(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

@@ -3,6 +3,7 @@
 package connpool
 
 import (
+	"bufio"
 	"context"
 	"sync"
 	"time"
@@ -14,6 +15,15 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
+// PooledStream is a libp2p stream paired with a persistent buffered reader.
+// The reader MUST survive across Acquire/Release cycles: a length-framed reply
+// may leave bytes buffered, and discarding the reader between requests would
+// lose them. Callers write to the embedded Stream and read via Reader.
+type PooledStream struct {
+	network.Stream
+	Reader *bufio.Reader
+}
+
 const (
 	// maxIdleTimeout is how long an idle stream stays in the pool before being closed.
 	maxIdleTimeout = 30 * time.Second
@@ -23,7 +33,7 @@ const (
 
 // idleStream wraps a stream together with the time it was last returned.
 type idleStream struct {
-	stream   network.Stream
+	stream    *PooledStream
 	idleSince time.Time
 }
 
@@ -77,7 +87,7 @@ func (p *Pool) getOrCreatePeer(id peer.ID) *peerPool {
 
 // Acquire returns an existing idle stream or opens a new one for peerID.
 // The caller must call Release when done.
-func (p *Pool) Acquire(ctx context.Context, peerID peer.ID) (network.Stream, error) {
+func (p *Pool) Acquire(ctx context.Context, peerID peer.ID) (*PooledStream, error) {
 	pp := p.getOrCreatePeer(peerID)
 
 	pp.mu.Lock()
@@ -105,16 +115,17 @@ func (p *Pool) Acquire(ctx context.Context, peerID peer.ID) (network.Stream, err
 	if err != nil {
 		return nil, err
 	}
+	ps := &PooledStream{Stream: s, Reader: bufio.NewReader(s)}
 	pp.mu.Lock()
 	pp.active++
 	pp.mu.Unlock()
 	metrics.PoolActiveStreams.Inc()
-	return s, nil
+	return ps, nil
 }
 
 // Release returns a stream to the pool. If the stream is in an error state it
 // is closed and discarded instead.
-func (p *Pool) Release(peerID peer.ID, s network.Stream, hadError bool) {
+func (p *Pool) Release(peerID peer.ID, s *PooledStream, hadError bool) {
 	pp := p.getOrCreatePeer(peerID)
 	pp.mu.Lock()
 	defer pp.mu.Unlock()

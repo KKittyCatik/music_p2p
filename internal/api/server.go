@@ -10,6 +10,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -68,13 +69,14 @@ type Server struct {
 	startTime time.Time
 
 	// Core components – all optional (nil-safe handlers).
-	stor     *storage.Storage
-	meta     MetadataBackend
-	q        *queue.Queue
-	scorer   *scoring.Scorer
-	engine   EngineBackend
-	dht      DHTBackend
-	hostInfo HostInfo
+	stor      *storage.Storage
+	meta      MetadataBackend
+	q         *queue.Queue
+	scorer    *scoring.Scorer
+	engine    EngineBackend
+	dht       DHTBackend
+	hostInfo  HostInfo
+	newStream StreamFactory
 
 	// Playback state.
 	playMu    sync.Mutex
@@ -83,15 +85,22 @@ type Server struct {
 	chunkIndex int
 }
 
+// StreamFactory creates a fresh audio byte stream for the given CID. It returns
+// an io.ReadCloser yielding raw MP3 bytes in playback order; Close stops the
+// underlying download. Used by GET /tracks/{cid}/stream so that clients (browser
+// <audio>, VLC, etc.) can listen directly over HTTP.
+type StreamFactory func(ctx context.Context, cid string) (io.ReadCloser, error)
+
 // Config holds the dependencies injected into a Server.
 type Config struct {
-	Storage  *storage.Storage
-	Metadata MetadataBackend
-	Queue    *queue.Queue
-	Scorer   *scoring.Scorer
-	Engine   EngineBackend
-	DHT      DHTBackend
-	Host     HostInfo
+	Storage   *storage.Storage
+	Metadata  MetadataBackend
+	Queue     *queue.Queue
+	Scorer    *scoring.Scorer
+	Engine    EngineBackend
+	DHT       DHTBackend
+	Host      HostInfo
+	NewStream StreamFactory
 }
 
 // New creates a Server and wires up all routes.
@@ -106,6 +115,7 @@ func New(cfg Config) *Server {
 		engine:    cfg.Engine,
 		dht:       cfg.DHT,
 		hostInfo:  cfg.Host,
+		newStream: cfg.NewStream,
 	}
 	s.routes()
 	return s
@@ -122,6 +132,7 @@ func (s *Server) routes() {
 	// Tracks / Storage
 	api.HandleFunc("/tracks", s.handleGetTracks).Methods(http.MethodGet)
 	api.HandleFunc("/tracks/share", s.handleShareTrack).Methods(http.MethodPost)
+	api.HandleFunc("/tracks/{cid}/stream", s.handleStreamTrack).Methods(http.MethodGet)
 	api.HandleFunc("/tracks/{cid}", s.handleDeleteTrack).Methods(http.MethodDelete)
 
 	// Metadata

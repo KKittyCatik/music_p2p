@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -78,18 +79,11 @@ func main() {
 		log.Fatalf("create metadata store: %v", err)
 	}
 
-	// 5. Create streaming engine and register stream handler
+	// 5. Create streaming engine and register the music protocol handler.
+	// engine.ServeStream handles both "TOTAL <cid>" and "GET <cid> <index>"
+	// requests, so it is the single authoritative handler for /music/1.0.0.
 	engine := streaming.NewEngine(h, dhtNode, stor, sc)
-	h.SetStreamHandler("/music/1.0.0", engine.ServeStream)
-
-	// 6. Register chunk handler for direct chunk serving
-	p2p.SetChunkHandler(h, func(cid string, index int) ([]byte, error) {
-		chunk, err := stor.GetChunk(cid, index)
-		if err != nil {
-			return nil, err
-		}
-		return streaming.ChunkBytes(chunk), nil
-	})
+	h.SetStreamHandler(p2p.MusicProtocol, engine.ServeStream)
 
 	// Shared playback queue (used by both CLI and API).
 	sharedQueue := queue.New()
@@ -115,6 +109,15 @@ func main() {
 			Engine:   engine,
 			DHT:      dhtNode,
 			Host:     h,
+			// NewStream builds a fresh engine per HTTP listener so multiple
+			// clients can stream concurrently without sharing playback state.
+			NewStream: func(ctx context.Context, cid string) (io.ReadCloser, error) {
+				eng := streaming.NewEngine(h, dhtNode, stor, sc)
+				if err := eng.StartStreaming(ctx, cid); err != nil {
+					return nil, err
+				}
+				return streaming.NewReadCloser(eng), nil
+			},
 		})
 		apiAddr := fmt.Sprintf(":%d", *apiPort)
 		log.Printf("API server listening on %s", apiAddr)

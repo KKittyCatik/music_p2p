@@ -1,4 +1,3 @@
-basePath: /api/v1
 definitions:
   github_com_KKittyCatik_music_p2p_internal_bitrate.Variant:
     properties:
@@ -118,13 +117,6 @@ definitions:
       chunk_index:
         type: integer
     type: object
-  internal_api.ShareRequest:
-    properties:
-      announce:
-        type: boolean
-      path:
-        type: string
-    type: object
   internal_api.StatusResponse:
     properties:
       connected_peers:
@@ -155,11 +147,6 @@ definitions:
     - 1000000000
     - 60000000000
     - 3600000000000
-    - 1
-    - 1000
-    - 1000000
-    - 1000000000
-    - 60000000000
     type: integer
     x-enum-varnames:
     - minDuration
@@ -170,17 +157,8 @@ definitions:
     - Second
     - Minute
     - Hour
-    - Nanosecond
-    - Microsecond
-    - Millisecond
-    - Second
-    - Minute
-host: localhost:8080
 info:
   contact: {}
-  description: P2P Music Streaming Node REST API
-  title: Music P2P API
-  version: "1.0"
 paths:
   /dht/provide/{cid}:
     post:
@@ -719,6 +697,41 @@ paths:
           schema:
             $ref: '#/definitions/internal_api.Response'
       summary: Delete a track
+      tags:
+      - tracks
+  /tracks/{cid}/stream:
+    get:
+      description: |-
+        Streams the track's MP3 audio bytes in playback order. Works for
+        both locally-stored tracks and tracks fetched from peers over P2P.
+        Point a browser <audio> element, VLC, or any HTTP media player at
+        this URL to listen. The response is chunked audio/mpeg.
+      parameters:
+      - description: Track CID
+        in: path
+        name: cid
+        required: true
+        type: string
+      produces:
+      - audio/mpeg
+      responses:
+        "200":
+          description: MP3 audio stream
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_api.Response'
+      summary: Stream a track
       tags:
       - tracks
   /tracks/share:
