@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -619,6 +621,74 @@ func (s *Server) handleConnectPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, ok(nil))
+}
+
+// handleGetInvite returns this node's shareable invite code.
+//
+// @Summary      Get invite code
+// @Description  Returns a single copy-paste-friendly invite code another node can
+// @Description  use to connect to this one, plus whether a publicly reachable
+// @Description  address is known and a note when reachability is limited.
+// @Tags         peers
+// @Produce      json
+// @Success      200  {object}  Response{data=InviteResponse}
+// @Failure      503  {object}  Response
+// @Router       /peers/invite [get]
+func (s *Server) handleGetInvite(w http.ResponseWriter, r *http.Request) {
+	if s.invite == nil {
+		writeStatus(w, http.StatusServiceUnavailable, fail("invite not available"))
+		return
+	}
+	code, peerID, reachable, note := s.invite()
+	writeJSON(w, ok(InviteResponse{Invite: code, PeerID: peerID, Reachable: reachable, Note: note}))
+}
+
+// handleJoin connects this node to the peer described by an invite code.
+//
+// @Summary      Join via invite code
+// @Description  Connect to the node identified by an invite code. Malformed,
+// @Description  unsupported, or self-referential codes are rejected with 400; an
+// @Description  unreachable peer fails within a bounded time with 504.
+// @Tags         peers
+// @Accept       json
+// @Produce      json
+// @Param        body  body      JoinRequest  true  "Invite code"
+// @Success      200   {object}  Response{data=JoinResponse}
+// @Failure      400   {object}  Response
+// @Failure      503   {object}  Response
+// @Failure      504   {object}  Response
+// @Router       /peers/join [post]
+func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
+	var req JoinRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeStatus(w, http.StatusBadRequest, fail("invalid request: "+err.Error()))
+		return
+	}
+	if req.Invite == "" {
+		writeStatus(w, http.StatusBadRequest, fail("invite is required"))
+		return
+	}
+	if s.joiner == nil {
+		writeStatus(w, http.StatusServiceUnavailable, fail("join not available"))
+		return
+	}
+
+	// Bound the dial so a join never hangs indefinitely (FR-009, SC-004).
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	peerID, err := s.joiner(ctx, req.Invite)
+	if err != nil {
+		metrics.PeersJoined.WithLabelValues("failure").Inc()
+		if errors.Is(err, ErrInvalidInvite) {
+			writeStatus(w, http.StatusBadRequest, fail(err.Error()))
+			return
+		}
+		writeStatus(w, http.StatusGatewayTimeout, fail("could not connect to peer: "+err.Error()))
+		return
+	}
+	metrics.PeersJoined.WithLabelValues("success").Inc()
+	writeJSON(w, ok(JoinResponse{PeerID: peerID, Connected: true}))
 }
 
 // handleGetPeerScore returns the score for a specific peer.

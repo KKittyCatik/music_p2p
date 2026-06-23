@@ -18,6 +18,17 @@ var (
 		Name: "music_p2p_peers_total",
 		Help: "Total all-time peer connections.",
 	})
+	PeersJoined = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "music_p2p_peers_joined_total",
+			Help: "Total invite-code join attempts by result (success/failure).",
+		},
+		[]string{"result"},
+	)
+	Reachability = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "music_p2p_reachability",
+		Help: "Node external reachability: 1 = public address known, 0 = local-only.",
+	})
 
 	// Streaming
 	ChunksDownloaded = prometheus.NewCounter(prometheus.CounterOpts{
@@ -108,6 +119,8 @@ func init() {
 	prometheus.MustRegister(
 		PeersConnected,
 		PeersTotal,
+		PeersJoined,
+		Reachability,
 		ChunksDownloaded,
 		ChunksFailed,
 		ChunkLatency,
