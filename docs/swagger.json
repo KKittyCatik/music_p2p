@@ -433,7 +433,7 @@
         },
         "/playback/play": {
             "post": {
-                "description": "Begin streaming the track identified by the given CID.",
+                "description": "Records the given CID as the node's current track and marks playback active. State-only control-plane operation: it updates in-memory state (queryable via GET /playback/status) and does NOT spawn a P2P download or speaker output. A headless node has no audio device, so to actually listen, stream the audio over HTTP via GET /tracks/{cid}/stream instead.",
                 "consumes": [
                     "application/json"
                 ],
@@ -443,7 +443,7 @@
                 "tags": [
                     "playback"
                 ],
-                "summary": "Start playback",
+                "summary": "Set current track (state only)",
                 "parameters": [
                     {
                         "description": "Play request",
@@ -479,19 +479,13 @@
                         "schema": {
                             "$ref": "#/definitions/internal_api.Response"
                         }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api.Response"
-                        }
                     }
                 }
             }
         },
         "/playback/seek": {
             "post": {
-                "description": "Jump to the given chunk index within the current track.",
+                "description": "Records the given chunk index as the current-track position. State-only control-plane operation: it updates state queryable via GET /playback/status and does not reposition an in-flight HTTP audio stream.",
                 "consumes": [
                     "application/json"
                 ],
@@ -575,7 +569,7 @@
         },
         "/playback/stop": {
             "post": {
-                "description": "Stop the currently playing track.",
+                "description": "Clears the node's current-track state and marks playback inactive. State-only control-plane operation: like /playback/play it does not interrupt an in-flight HTTP audio stream (close the GET /tracks/{cid}/stream response on the client to stop listening).",
                 "produces": [
                     "application/json"
                 ],

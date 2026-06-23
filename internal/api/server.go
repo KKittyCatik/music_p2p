@@ -49,6 +49,12 @@ type MetadataBackend interface {
 }
 
 // EngineBackend is the subset of streaming.Engine used by the API.
+//
+// The /playback/* control-plane endpoints are state-only and never drive the
+// shared engine (see handlePlay), so the API itself only consumes
+// AdaptiveBitrate for GET /engine/status. StartStreaming/Stop/Seek remain part
+// of the interface so the concrete engine satisfies it and tests can assert the
+// control plane leaves them untouched.
 type EngineBackend interface {
 	StartStreaming(ctx context.Context, cid string) error
 	Stop()

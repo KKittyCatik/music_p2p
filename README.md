@@ -250,9 +250,9 @@ All endpoints are prefixed with `/api/v1`. Responses are JSON with the shape `{"
 | `GET` | `/metadata/search?q=` | Search by title/artist (case-insensitive) |
 | `GET` | `/metadata/{cid}` | Get metadata for a specific CID |
 | `POST` | `/metadata` | Publish metadata to gossipsub |
-| `POST` | `/playback/play` | Start streaming a track (body: `{"cid": "..."}`) |
-| `POST` | `/playback/stop` | Stop current playback |
-| `POST` | `/playback/seek` | Seek to a chunk index (body: `{"chunk_index": N}`) |
+| `POST` | `/playback/play` | Set the current-track state (body: `{"cid": "..."}`) — **state only, no audio**; to listen use `/tracks/{cid}/stream` |
+| `POST` | `/playback/stop` | Clear the current-track state |
+| `POST` | `/playback/seek` | Update the current-track position marker (body: `{"chunk_index": N}`) |
 | `GET` | `/playback/status` | Current playback state (CID, chunk, playing) |
 | `GET` | `/queue` | Current queue state (upcoming + current item) |
 | `POST` | `/queue` | Enqueue a track (body: `{"cid": "...", "title": "...", "artist": "..."}`) |
@@ -266,6 +266,16 @@ All endpoints are prefixed with `/api/v1`. Responses are JSON with the shape `{"
 | `GET` | `/dht/providers/{cid}` | Find providers for a CID |
 | `GET` | `/engine/status` | Streaming engine stats (chunks buffered, ABR bitrate) |
 | `GET` | `/swagger/*` | Interactive Swagger UI |
+
+> **Playback endpoints are a control plane, not an audio sink.** A node is
+> typically headless (Docker, no speaker), so `/playback/play`, `/stop`, `/seek`
+> only read and write the node's in-memory "current track" state — they do **not**
+> start a P2P download or emit audio. (An earlier version called the streaming
+> engine here with nothing consuming it; the buffer filled, the anti-stall
+> monitor logged *"stall detected"* on a loop, and libp2p streams to the peer
+> leaked.) **To actually hear audio, stream it over HTTP from
+> `GET /tracks/{cid}/stream`** (see the quickstart below), which drives its own
+> engine and is read to completion.
 
 ---
 

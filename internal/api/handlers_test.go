@@ -9,16 +9,56 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/KKittyCatik/music_p2p/internal/api"
+	"github.com/KKittyCatik/music_p2p/internal/bitrate"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
+	"github.com/KKittyCatik/music_p2p/internal/metrics"
 	"github.com/KKittyCatik/music_p2p/internal/queue"
 	"github.com/KKittyCatik/music_p2p/internal/scoring"
 	"github.com/KKittyCatik/music_p2p/internal/storage"
 )
+
+// spyEngine is an api.EngineBackend that records calls to the download-driving
+// methods. On a headless node the /playback/* control plane is state-only, so
+// these must never be invoked — calling StartStreaming with no consumer is what
+// caused the buffer-fill, anti-stall "stall detected" spam, and libp2p stream
+// leak that this change fixes.
+type spyEngine struct {
+	startCalls int32
+	stopCalls  int32
+	seekCalls  int32
+}
+
+func (e *spyEngine) StartStreaming(ctx context.Context, cid string) error {
+	atomic.AddInt32(&e.startCalls, 1)
+	return nil
+}
+func (e *spyEngine) Stop()        { atomic.AddInt32(&e.stopCalls, 1) }
+func (e *spyEngine) Seek(idx int) { atomic.AddInt32(&e.seekCalls, 1) }
+func (e *spyEngine) AdaptiveBitrate() *bitrate.AdaptiveBitrate {
+	return bitrate.NewAdaptiveBitrate()
+}
+
+// newSpyServer builds an API server wired to a spyEngine so tests can assert the
+// playback control plane never drives the shared engine.
+func newSpyServer(t *testing.T) (*api.Server, *spyEngine) {
+	t.Helper()
+	eng := &spyEngine{}
+	srv := api.New(api.Config{
+		Storage:  storage.New(t.TempDir()),
+		Metadata: metadata.NewLocalStore(),
+		Queue:    queue.New(),
+		Scorer:   scoring.NewScorer(),
+		Engine:   eng,
+	})
+	return srv, eng
+}
 
 // newTestServer creates an API server with lightweight real components.
 func newTestServer(t *testing.T) *api.Server {
@@ -258,4 +298,75 @@ func TestShareTrackWithFile(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	resp := decodeResponse(t, rr)
 	assert.True(t, resp.Success)
+}
+
+// TestPlayIsStateOnly verifies that POST /playback/play records the current
+// track in playback state without ever driving the shared engine. Starting a
+// download on a node with no active listener is what produced the "stall
+// detected" log spam, the ever-incrementing StallEvents metric, and leaked
+// libp2p streams; the control plane must not do it.
+func TestPlayIsStateOnly(t *testing.T) {
+	srv, eng := newSpyServer(t)
+
+	rr := doRequest(t, srv, http.MethodPost, "/api/v1/playback/play", api.PlayRequest{CID: "deadbeef"})
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.True(t, decodeResponse(t, rr).Success)
+
+	// State is recorded and visible via /playback/status.
+	rr = doRequest(t, srv, http.MethodGet, "/api/v1/playback/status", nil)
+	data := decodeResponse(t, rr).Data.(map[string]interface{})
+	assert.Equal(t, true, data["playing"])
+	assert.Equal(t, "deadbeef", data["cid"])
+
+	// The shared engine was never asked to start a download.
+	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.startCalls),
+		"playback/play must not call StartStreaming on a headless node")
+}
+
+// TestPlayDoesNotIncrementStallEvents is the regression guard for the reported
+// bug: after calling /playback/play with no listener there must be no anti-stall
+// activity, because no download loop is ever started.
+func TestPlayDoesNotIncrementStallEvents(t *testing.T) {
+	before := testutil.ToFloat64(metrics.StallEvents)
+
+	srv, eng := newSpyServer(t)
+	rr := doRequest(t, srv, http.MethodPost, "/api/v1/playback/play", api.PlayRequest{CID: "abc123"})
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	// No StartStreaming → no downloadLoop → no anti-stall monitor → flat metric.
+	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.startCalls))
+	assert.Equal(t, before, testutil.ToFloat64(metrics.StallEvents),
+		"playback/play must not trigger the anti-stall monitor")
+}
+
+func TestPlayMissingCID(t *testing.T) {
+	srv, _ := newSpyServer(t)
+	rr := doRequest(t, srv, http.MethodPost, "/api/v1/playback/play", api.PlayRequest{})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.False(t, decodeResponse(t, rr).Success)
+}
+
+// TestStopAndSeekAreStateOnly verifies stop and seek mutate only in-memory state
+// and likewise never reach the shared engine.
+func TestStopAndSeekAreStateOnly(t *testing.T) {
+	srv, eng := newSpyServer(t)
+
+	doRequest(t, srv, http.MethodPost, "/api/v1/playback/play", api.PlayRequest{CID: "abc123"})
+
+	rrSeek := doRequest(t, srv, http.MethodPost, "/api/v1/playback/seek", api.SeekRequest{ChunkIndex: 7})
+	assert.Equal(t, http.StatusOK, rrSeek.Code)
+
+	rrStop := doRequest(t, srv, http.MethodPost, "/api/v1/playback/stop", nil)
+	assert.Equal(t, http.StatusOK, rrStop.Code)
+
+	// Status reflects the recorded seek position and the stopped flag.
+	rr := doRequest(t, srv, http.MethodGet, "/api/v1/playback/status", nil)
+	data := decodeResponse(t, rr).Data.(map[string]interface{})
+	assert.Equal(t, false, data["playing"])
+	assert.Equal(t, float64(7), data["chunk_index"])
+
+	// None of the engine's download-driving methods were touched.
+	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.startCalls))
+	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.stopCalls))
+	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.seekCalls))
 }

@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"github.com/KKittyCatik/music_p2p/internal/metrics"
 )
 
@@ -79,7 +81,26 @@ func metricsMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		dur := time.Since(start).Seconds()
 		statusStr := fmt.Sprintf("%d", rec.status)
-		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
-		metrics.HTTPRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(dur)
+		path := routeTemplate(r)
+		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, path, statusStr).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(r.Method, path).Observe(dur)
 	})
+}
+
+// routeTemplate returns the matched gorilla/mux route template (e.g.
+// "/api/v1/tracks/{cid}") so that Prometheus labels use the low-cardinality
+// route pattern instead of the concrete request path. Embedding raw paths would
+// create a new time series per distinct CID/peer ID, causing unbounded memory
+// growth in both the node and Prometheus. Falls back to "unknown" when no route
+// matched (e.g. 404s) or the template can't be resolved.
+func routeTemplate(r *http.Request) string {
+	route := mux.CurrentRoute(r)
+	if route == nil {
+		return "unknown"
+	}
+	tmpl, err := route.GetPathTemplate()
+	if err != nil {
+		return "unknown"
+	}
+	return tmpl
 }
