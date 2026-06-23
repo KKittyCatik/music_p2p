@@ -139,7 +139,25 @@ docker compose --profile observability up -d --build
 Each machine runs its own `docker compose up`. Nodes find each other through:
 
 1. **mDNS** – automatic discovery on the same LAN (no configuration needed).
-2. **Bootstrap** – for nodes on different networks, pass at least one known peer address via the `BOOTSTRAP_ADDRS` environment variable (comma-separated multiaddrs):
+2. **Invite codes** (easiest across the internet, no servers) – each node prints a
+   one-line **invite code** at startup (and serves it at `GET /api/v1/peers/invite`).
+   Send the code to a friend; they connect with it — no IPs, ports, or peer IDs to
+   type. NAT traversal is automatic via UPnP/NAT-PMP, AutoNAT, and hole punching.
+
+   ```bash
+   # Node A — copy the code from startup logs or:
+   curl -s http://localhost:8080/api/v1/peers/invite | jq -r .data.invite
+   #   → music:join:eyJ2Ijox...
+
+   # Node B — join with the code (or pass --join "<code>" at startup):
+   curl -X POST http://localhost:8080/api/v1/peers/join \
+     -H 'Content-Type: application/json' -d '{"invite":"music:join:eyJ2Ijox..."}'
+   ```
+
+   If a node reports `"reachable": false`, only local addresses are known — remote
+   peers may not connect until UPnP is enabled on the router or TCP port 4001 is
+   forwarded manually.
+3. **Bootstrap** – for advanced setups, pass at least one known peer address via the `BOOTSTRAP_ADDRS` environment variable (comma-separated multiaddrs):
 
 ```bash
 # Machine A – start first, note the peer ID printed in logs
@@ -261,6 +279,8 @@ All endpoints are prefixed with `/api/v1`. Responses are JSON with the shape `{"
 | `GET` | `/queue/history` | Play history (oldest first) |
 | `GET` | `/peers` | Connected peers with scoring data |
 | `POST` | `/peers/connect` | Connect to a peer (body: `{"multiaddr": "/ip4/..."}`) |
+| `GET` | `/peers/invite` | **Get this node's shareable invite code** (+ reachability) |
+| `POST` | `/peers/join` | **Connect using an invite code** (body: `{"invite": "music:join:..."}`) |
 | `GET` | `/peers/{peerID}/score` | Scoring details for a specific peer |
 | `POST` | `/dht/provide/{cid}` | Announce a CID to the DHT |
 | `GET` | `/dht/providers/{cid}` | Find providers for a CID |

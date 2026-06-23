@@ -78,6 +78,25 @@ type ConnectRequest struct {
 	Multiaddr string `json:"multiaddr"`
 }
 
+// JoinRequest is the body for POST /peers/join.
+type JoinRequest struct {
+	Invite string `json:"invite"`
+}
+
+// InviteResponse is returned by GET /peers/invite.
+type InviteResponse struct {
+	Invite    string `json:"invite"`
+	PeerID    string `json:"peer_id"`
+	Reachable bool   `json:"reachable"`
+	Note      string `json:"note"`
+}
+
+// JoinResponse is returned by POST /peers/join.
+type JoinResponse struct {
+	PeerID    string `json:"peer_id"`
+	Connected bool   `json:"connected"`
+}
+
 // PeerInfo describes a connected peer.
 type PeerInfo struct {
 	ID    string  `json:"id"`

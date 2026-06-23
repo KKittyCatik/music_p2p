@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -369,4 +370,81 @@ func TestStopAndSeekAreStateOnly(t *testing.T) {
 	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.startCalls))
 	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.stopCalls))
 	assert.Equal(t, int32(0), atomic.LoadInt32(&eng.seekCalls))
+}
+
+// --- Invite-code connection (feature 001-invite-connect) ---
+
+func newInviteServer(t *testing.T, inv api.InviteProvider, join api.Joiner) *api.Server {
+	t.Helper()
+	return api.New(api.Config{
+		Storage:  storage.New(t.TempDir()),
+		Metadata: metadata.NewLocalStore(),
+		Queue:    queue.New(),
+		Scorer:   scoring.NewScorer(),
+		Invite:   inv,
+		Joiner:   join,
+	})
+}
+
+func TestGetInvite(t *testing.T) {
+	srv := newInviteServer(t, func() (string, string, bool, string) {
+		return "music:join:abc", "12D3KooWpeer", true, ""
+	}, nil)
+	rr := doRequest(t, srv, http.MethodGet, "/api/v1/peers/invite", nil)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	data := decodeResponse(t, rr).Data.(map[string]interface{})
+	assert.Equal(t, "music:join:abc", data["invite"])
+	assert.Equal(t, true, data["reachable"])
+}
+
+func TestGetInviteUnavailable(t *testing.T) {
+	srv := newTestServer(t) // no Invite provider wired
+	rr := doRequest(t, srv, http.MethodGet, "/api/v1/peers/invite", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
+func TestJoinMissingInvite(t *testing.T) {
+	srv := newInviteServer(t, nil, func(ctx context.Context, code string) (string, error) {
+		return "x", nil
+	})
+	rr := doRequest(t, srv, http.MethodPost, "/api/v1/peers/join", api.JoinRequest{})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestJoinMalformedRejected(t *testing.T) {
+	srv := newInviteServer(t, nil, func(ctx context.Context, code string) (string, error) {
+		return "", api.ErrInvalidInvite
+	})
+	rr := doRequest(t, srv, http.MethodPost, "/api/v1/peers/join", api.JoinRequest{Invite: "music:join:garbage"})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestJoinUnreachableFailsFast(t *testing.T) {
+	srv := newInviteServer(t, nil, func(ctx context.Context, code string) (string, error) {
+		return "", errors.New("dial timeout")
+	})
+	rr := doRequest(t, srv, http.MethodPost, "/api/v1/peers/join", api.JoinRequest{Invite: "music:join:valid"})
+	assert.Equal(t, http.StatusGatewayTimeout, rr.Code)
+}
+
+func TestJoinSuccess(t *testing.T) {
+	srv := newInviteServer(t, nil, func(ctx context.Context, code string) (string, error) {
+		return "12D3KooWpeer", nil
+	})
+	rr := doRequest(t, srv, http.MethodPost, "/api/v1/peers/join", api.JoinRequest{Invite: "music:join:valid"})
+	assert.Equal(t, http.StatusOK, rr.Code)
+	data := decodeResponse(t, rr).Data.(map[string]interface{})
+	assert.Equal(t, true, data["connected"])
+	assert.Equal(t, "12D3KooWpeer", data["peer_id"])
+}
+
+func TestGetInviteLimitedReachability(t *testing.T) {
+	srv := newInviteServer(t, func() (string, string, bool, string) {
+		return "music:join:local", "12D3KooWlocal", false, "Only local addresses are known — enable UPnP or forward the port."
+	}, nil)
+	rr := doRequest(t, srv, http.MethodGet, "/api/v1/peers/invite", nil)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	data := decodeResponse(t, rr).Data.(map[string]interface{})
+	assert.Equal(t, false, data["reachable"])
+	assert.NotEmpty(t, data["note"], "limited reachability must include an actionable note")
 }
