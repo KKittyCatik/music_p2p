@@ -279,8 +279,6 @@ All endpoints are prefixed with `/api/v1`. Responses are JSON with the shape `{"
 | `GET` | `/queue/history` | Play history (oldest first) |
 | `GET` | `/peers` | Connected peers with scoring data |
 | `POST` | `/peers/connect` | Connect to a peer (body: `{"multiaddr": "/ip4/..."}`) |
-| `GET` | `/peers/invite` | **Get this node's shareable invite code** (+ reachability) |
-| `POST` | `/peers/join` | **Connect using an invite code** (body: `{"invite": "music:join:..."}`) |
 | `GET` | `/peers/{peerID}/score` | Scoring details for a specific peer |
 | `POST` | `/dht/provide/{cid}` | Announce a CID to the DHT |
 | `GET` | `/dht/providers/{cid}` | Find providers for a CID |
