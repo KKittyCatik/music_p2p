@@ -10,6 +10,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -49,6 +50,12 @@ type MetadataBackend interface {
 }
 
 // EngineBackend is the subset of streaming.Engine used by the API.
+//
+// The /playback/* control-plane endpoints are state-only and never drive the
+// shared engine (see handlePlay), so the API itself only consumes
+// AdaptiveBitrate for GET /engine/status. StartStreaming/Stop/Seek remain part
+// of the interface so the concrete engine satisfies it and tests can assert the
+// control plane leaves them untouched.
 type EngineBackend interface {
 	StartStreaming(ctx context.Context, cid string) error
 	Stop()
@@ -77,6 +84,8 @@ type Server struct {
 	dht       DHTBackend
 	hostInfo  HostInfo
 	newStream StreamFactory
+	invite    InviteProvider
+	joiner    Joiner
 
 	// Playback state.
 	playMu    sync.Mutex
@@ -91,6 +100,20 @@ type Server struct {
 // <audio>, VLC, etc.) can listen directly over HTTP.
 type StreamFactory func(ctx context.Context, cid string) (io.ReadCloser, error)
 
+// ErrInvalidInvite marks a join failure caused by a malformed, unsupported, or
+// self-referential invite code (a client error → HTTP 400), as opposed to a
+// connection failure (→ HTTP 504). A Joiner wraps it via fmt.Errorf("%w: ...").
+var ErrInvalidInvite = errors.New("invalid invite")
+
+// InviteProvider returns this node's shareable invite code along with its peer
+// ID, whether a publicly reachable address is known, and a human-readable note
+// (used when reachability is limited). Used by GET /peers/invite.
+type InviteProvider func() (code, peerID string, reachable bool, note string)
+
+// Joiner connects this node to the peer described by an invite code, returning
+// the connected peer ID. Used by POST /peers/join.
+type Joiner func(ctx context.Context, code string) (peerID string, err error)
+
 // Config holds the dependencies injected into a Server.
 type Config struct {
 	Storage   *storage.Storage
@@ -101,6 +124,8 @@ type Config struct {
 	DHT       DHTBackend
 	Host      HostInfo
 	NewStream StreamFactory
+	Invite    InviteProvider
+	Joiner    Joiner
 }
 
 // New creates a Server and wires up all routes.
@@ -116,6 +141,8 @@ func New(cfg Config) *Server {
 		dht:       cfg.DHT,
 		hostInfo:  cfg.Host,
 		newStream: cfg.NewStream,
+		invite:    cfg.Invite,
+		joiner:    cfg.Joiner,
 	}
 	s.routes()
 	return s
@@ -157,6 +184,8 @@ func (s *Server) routes() {
 	// Peers
 	api.HandleFunc("/peers", s.handleGetPeers).Methods(http.MethodGet)
 	api.HandleFunc("/peers/connect", s.handleConnectPeer).Methods(http.MethodPost)
+	api.HandleFunc("/peers/invite", s.handleGetInvite).Methods(http.MethodGet)
+	api.HandleFunc("/peers/join", s.handleJoin).Methods(http.MethodPost)
 	api.HandleFunc("/peers/{peerID}/score", s.handleGetPeerScore).Methods(http.MethodGet)
 
 	// DHT

@@ -1,2 +1,18 @@
 bin/
 *.exe
+*.test
+*.out
+/music_p2p_node
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.*

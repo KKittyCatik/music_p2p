@@ -384,6 +384,108 @@
                 }
             }
         },
+        "/peers/invite": {
+            "get": {
+                "description": "Returns a single copy-paste-friendly invite code another node can\nuse to connect to this one, plus whether a publicly reachable\naddress is known and a note when reachability is limited.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "peers"
+                ],
+                "summary": "Get invite code",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.InviteResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/peers/join": {
+            "post": {
+                "description": "Connect to the node identified by an invite code. Malformed,\nunsupported, or self-referential codes are rejected with 400; an\nunreachable peer fails within a bounded time with 504.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "peers"
+                ],
+                "summary": "Join via invite code",
+                "parameters": [
+                    {
+                        "description": "Invite code",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.JoinRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api.JoinResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/peers/{peerID}/score": {
             "get": {
                 "description": "Returns the composite score for the given peer ID.",
@@ -433,7 +535,7 @@
         },
         "/playback/play": {
             "post": {
-                "description": "Begin streaming the track identified by the given CID.",
+                "description": "Records the given CID as the node's current track and marks playback\nactive. This is a lightweight control-plane operation: it only updates\nin-memory state (queryable via GET /playback/status) and does NOT spawn\na P2P download or speaker output. A headless node has no audio device,\nso to actually listen, stream the audio over HTTP via\nGET /tracks/{cid}/stream instead.",
                 "consumes": [
                     "application/json"
                 ],
@@ -443,7 +545,7 @@
                 "tags": [
                     "playback"
                 ],
-                "summary": "Start playback",
+                "summary": "Set current track (state only)",
                 "parameters": [
                     {
                         "description": "Play request",
@@ -479,19 +581,13 @@
                         "schema": {
                             "$ref": "#/definitions/internal_api.Response"
                         }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api.Response"
-                        }
                     }
                 }
             }
         },
         "/playback/seek": {
             "post": {
-                "description": "Jump to the given chunk index within the current track.",
+                "description": "Records the given chunk index as the current-track position. This is a\nstate-only control-plane operation; it updates state queryable via\nGET /playback/status and does not reposition an in-flight HTTP audio\nstream (issue a ranged GET on /tracks/{cid}/stream for that).",
                 "consumes": [
                     "application/json"
                 ],
@@ -575,7 +671,7 @@
         },
         "/playback/stop": {
             "post": {
-                "description": "Stop the currently playing track.",
+                "description": "Clears the node's current-track state and marks playback inactive.\nLike /playback/play this is a state-only control-plane operation; it\ndoes not interrupt an in-flight HTTP audio stream (close the\nGET /tracks/{cid}/stream response on the client to stop listening).",
                 "produces": [
                     "application/json"
                 ],
@@ -1070,6 +1166,42 @@
                 },
                 "bandwidth_bps": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api.InviteResponse": {
+            "type": "object",
+            "properties": {
+                "invite": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "reachable": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_api.JoinRequest": {
+            "type": "object",
+            "properties": {
+                "invite": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.JoinResponse": {
+            "type": "object",
+            "properties": {
+                "connected": {
+                    "type": "boolean"
+                },
+                "peer_id": {
+                    "type": "string"
                 }
             }
         },

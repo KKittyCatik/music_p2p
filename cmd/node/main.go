@@ -17,10 +17,12 @@ import (
 	"github.com/KKittyCatik/music_p2p/internal/audio"
 	internaldht "github.com/KKittyCatik/music_p2p/internal/dht"
 	"github.com/KKittyCatik/music_p2p/internal/discovery"
+	"github.com/KKittyCatik/music_p2p/internal/invite"
 	"github.com/KKittyCatik/music_p2p/internal/logging"
 	"github.com/KKittyCatik/music_p2p/internal/metadata"
 	"github.com/KKittyCatik/music_p2p/internal/metrics"
 	"github.com/KKittyCatik/music_p2p/internal/p2p"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/KKittyCatik/music_p2p/internal/queue"
 	"github.com/KKittyCatik/music_p2p/internal/scoring"
 	"github.com/KKittyCatik/music_p2p/internal/storage"
@@ -41,6 +43,7 @@ func main() {
 		bootstrapAddrs = flag.String("bootstrap", "", "comma-separated bootstrap peer multiaddrs")
 		logLevel       = flag.String("log-level", "info", "log level: debug, info, warn, error")
 		metricsPort    = flag.Int("metrics-port", 0, "port for the Prometheus metrics server (0 = disabled)")
+		joinCode       = flag.String("join", "", "invite code of a peer to connect to on startup")
 	)
 	flag.Parse()
 
@@ -85,6 +88,37 @@ func main() {
 	engine := streaming.NewEngine(h, dhtNode, stor, sc)
 	h.SetStreamHandler(p2p.MusicProtocol, engine.ServeStream)
 
+	// Invite-code connection (see specs/001-invite-connect).
+	// buildInvite encodes the node's current reachable addresses into a single
+	// shareable code; joinByCode connects to the node a code describes.
+	buildInvite := func() (code, peerID string, reachable bool, note string) {
+		addrs := h.Addrs()
+		code = invite.Encode(h.ID(), addrs)
+		reachable = invite.IsPublic(addrs)
+		if reachable {
+			metrics.Reachability.Set(1)
+		} else {
+			metrics.Reachability.Set(0)
+			note = fmt.Sprintf("Only local addresses are known — peers on other "+
+				"networks may not be able to connect. Enable UPnP on your router "+
+				"or forward TCP port %d.", *listenPort)
+		}
+		return code, h.ID().String(), reachable, note
+	}
+	joinByCode := func(ctx context.Context, code string) (string, error) {
+		info, err := invite.Decode(code)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", api.ErrInvalidInvite, err)
+		}
+		if info.ID == h.ID() {
+			return "", fmt.Errorf("%w: cannot join your own node", api.ErrInvalidInvite)
+		}
+		if err := h.Connect(ctx, peer.AddrInfo{ID: info.ID, Addrs: info.Addrs}); err != nil {
+			return "", err
+		}
+		return info.ID.String(), nil
+	}
+
 	// Shared playback queue (used by both CLI and API).
 	sharedQueue := queue.New()
 
@@ -118,6 +152,8 @@ func main() {
 				}
 				return streaming.NewReadCloser(eng), nil
 			},
+			Invite: buildInvite,
+			Joiner: joinByCode,
 		})
 		apiAddr := fmt.Sprintf(":%d", *apiPort)
 		log.Printf("API server listening on %s", apiAddr)
@@ -152,6 +188,28 @@ func main() {
 
 	// 4c. DHT rendezvous discovery
 	discovery.StartDHTDiscovery(ctx, h, dhtNode.IpfsDHT())
+
+	// --join: connect to a peer by invite code on startup.
+	if *joinCode != "" {
+		jctx, jcancel := context.WithTimeout(ctx, 30*time.Second)
+		pid, err := joinByCode(jctx, *joinCode)
+		jcancel()
+		if err != nil {
+			log.Printf("join: %v", err)
+		} else {
+			log.Printf("join: connected to peer %s", pid)
+		}
+	}
+
+	// Print this node's shareable invite code prominently so the user can copy it.
+	inviteCode, _, reachable, note := buildInvite()
+	log.Printf("================= INVITE CODE =================")
+	log.Printf("Your invite code: %s", inviteCode)
+	if !reachable {
+		log.Printf("Note: %s", note)
+	}
+	log.Printf("A friend connects with:  --join <code>   or   POST /api/v1/peers/join")
+	log.Printf("==============================================")
 
 	// --share: load and optionally announce a local MP3
 	if *sharePath != "" {

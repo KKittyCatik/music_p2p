@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -320,17 +321,21 @@ func (s *Server) handlePublishMetadata(w http.ResponseWriter, r *http.Request) {
 	writeStatus(w, http.StatusCreated, ok(meta))
 }
 
-// handlePlay starts streaming a track.
+// handlePlay records the node's current playback selection.
 //
-// @Summary      Start playback
-// @Description  Begin streaming the track identified by the given CID.
+// @Summary      Set current track (state only)
+// @Description  Records the given CID as the node's current track and marks playback
+// @Description  active. This is a lightweight control-plane operation: it only updates
+// @Description  in-memory state (queryable via GET /playback/status) and does NOT spawn
+// @Description  a P2P download or speaker output. A headless node has no audio device,
+// @Description  so to actually listen, stream the audio over HTTP via
+// @Description  GET /tracks/{cid}/stream instead.
 // @Tags         playback
 // @Accept       json
 // @Produce      json
 // @Param        body  body      PlayRequest  true  "Play request"
 // @Success      200   {object}  Response{data=PlaybackStatus}
 // @Failure      400   {object}  Response
-// @Failure      500   {object}  Response
 // @Router       /playback/play [post]
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	var req PlayRequest
@@ -343,13 +348,12 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.engine != nil {
-		if err := s.engine.StartStreaming(context.Background(), req.CID); err != nil {
-			writeStatus(w, http.StatusInternalServerError, fail("start streaming: "+err.Error()))
-			return
-		}
-	}
-
+	// State-only: deliberately do NOT call s.engine.StartStreaming here. The
+	// shared engine has no consumer on a headless node, so starting a download
+	// would fill the buffer to capacity, trip the anti-stall monitor in a tight
+	// loop ("stall detected" spam + StallEvents), and leak libp2p streams to the
+	// provider. Actual listening goes through GET /tracks/{cid}/stream, which
+	// drives its own per-request engine that is read to completion.
 	s.playMu.Lock()
 	s.playingCID = req.CID
 	s.isPlaying = true
@@ -361,18 +365,18 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ok(s.playbackStatus()))
 }
 
-// handleStop stops the current playback.
+// handleStop clears the current playback selection.
 //
 // @Summary      Stop playback
-// @Description  Stop the currently playing track.
+// @Description  Clears the node's current-track state and marks playback inactive.
+// @Description  Like /playback/play this is a state-only control-plane operation; it
+// @Description  does not interrupt an in-flight HTTP audio stream (close the
+// @Description  GET /tracks/{cid}/stream response on the client to stop listening).
 // @Tags         playback
 // @Produce      json
 // @Success      200  {object}  Response{data=PlaybackStatus}
 // @Router       /playback/stop [post]
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	if s.engine != nil {
-		s.engine.Stop()
-	}
 	s.playMu.Lock()
 	s.isPlaying = false
 	s.playMu.Unlock()
@@ -380,10 +384,13 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ok(s.playbackStatus()))
 }
 
-// handleSeek seeks to a specific chunk position.
+// handleSeek updates the current-track position marker.
 //
 // @Summary      Seek playback
-// @Description  Jump to the given chunk index within the current track.
+// @Description  Records the given chunk index as the current-track position. This is a
+// @Description  state-only control-plane operation; it updates state queryable via
+// @Description  GET /playback/status and does not reposition an in-flight HTTP audio
+// @Description  stream (issue a ranged GET on /tracks/{cid}/stream for that).
 // @Tags         playback
 // @Accept       json
 // @Produce      json
@@ -396,9 +403,6 @@ func (s *Server) handleSeek(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeStatus(w, http.StatusBadRequest, fail("invalid request: "+err.Error()))
 		return
-	}
-	if s.engine != nil {
-		s.engine.Seek(req.ChunkIndex)
 	}
 	s.playMu.Lock()
 	s.chunkIndex = req.ChunkIndex
@@ -617,6 +621,74 @@ func (s *Server) handleConnectPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, ok(nil))
+}
+
+// handleGetInvite returns this node's shareable invite code.
+//
+// @Summary      Get invite code
+// @Description  Returns a single copy-paste-friendly invite code another node can
+// @Description  use to connect to this one, plus whether a publicly reachable
+// @Description  address is known and a note when reachability is limited.
+// @Tags         peers
+// @Produce      json
+// @Success      200  {object}  Response{data=InviteResponse}
+// @Failure      503  {object}  Response
+// @Router       /peers/invite [get]
+func (s *Server) handleGetInvite(w http.ResponseWriter, r *http.Request) {
+	if s.invite == nil {
+		writeStatus(w, http.StatusServiceUnavailable, fail("invite not available"))
+		return
+	}
+	code, peerID, reachable, note := s.invite()
+	writeJSON(w, ok(InviteResponse{Invite: code, PeerID: peerID, Reachable: reachable, Note: note}))
+}
+
+// handleJoin connects this node to the peer described by an invite code.
+//
+// @Summary      Join via invite code
+// @Description  Connect to the node identified by an invite code. Malformed,
+// @Description  unsupported, or self-referential codes are rejected with 400; an
+// @Description  unreachable peer fails within a bounded time with 504.
+// @Tags         peers
+// @Accept       json
+// @Produce      json
+// @Param        body  body      JoinRequest  true  "Invite code"
+// @Success      200   {object}  Response{data=JoinResponse}
+// @Failure      400   {object}  Response
+// @Failure      503   {object}  Response
+// @Failure      504   {object}  Response
+// @Router       /peers/join [post]
+func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
+	var req JoinRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeStatus(w, http.StatusBadRequest, fail("invalid request: "+err.Error()))
+		return
+	}
+	if req.Invite == "" {
+		writeStatus(w, http.StatusBadRequest, fail("invite is required"))
+		return
+	}
+	if s.joiner == nil {
+		writeStatus(w, http.StatusServiceUnavailable, fail("join not available"))
+		return
+	}
+
+	// Bound the dial so a join never hangs indefinitely (FR-009, SC-004).
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	peerID, err := s.joiner(ctx, req.Invite)
+	if err != nil {
+		metrics.PeersJoined.WithLabelValues("failure").Inc()
+		if errors.Is(err, ErrInvalidInvite) {
+			writeStatus(w, http.StatusBadRequest, fail(err.Error()))
+			return
+		}
+		writeStatus(w, http.StatusGatewayTimeout, fail("could not connect to peer: "+err.Error()))
+		return
+	}
+	metrics.PeersJoined.WithLabelValues("success").Inc()
+	writeJSON(w, ok(JoinResponse{PeerID: peerID, Connected: true}))
 }
 
 // handleGetPeerScore returns the score for a specific peer.
